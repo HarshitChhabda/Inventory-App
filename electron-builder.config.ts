@@ -35,8 +35,8 @@ const config: Configuration = {
   publish: [
     {
       provider: 'github',
-      owner: 'mahaveerji',
-      repo: 'inventory-app',
+      owner: 'HarshitChhabda',
+      repo: 'Inventory-App',
       releaseType: 'release',
     },
   ],
