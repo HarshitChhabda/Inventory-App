@@ -705,6 +705,19 @@ export async function fetchReportData(params: ReportQueryParams): Promise<any[]>
         orderBy: { transactionDate: 'asc' },
       });
 
+      // Pre-fetch TransferChallan source department types for Store pool calculation
+      const tcRefIds = [...new Set(txns.filter((t: any) => t.referenceType === 'TransferChallan' && t.referenceId).map((t: any) => t.referenceId))];
+      const tcSourceDeptMap: Record<number, string> = {};
+      if (tcRefIds.length > 0) {
+        const tcs = await api.dbQuery('transferChallan', 'findMany', {
+          where: { id: { in: tcRefIds } },
+          include: { fromDepartment: true },
+        });
+        for (const tc of tcs) {
+          tcSourceDeptMap[tc.id] = (tc as any).fromDepartment?.departmentType || '';
+        }
+      }
+
       const itemMap: Record<number, any> = {};
       for (const txn of txns) {
         const iid = txn.itemId;
@@ -726,9 +739,16 @@ export async function fetchReportData(params: ReportQueryParams): Promise<any[]>
         const isRoom = txn.locationId != null;
 
         if (isStore) {
-          // Store: PURCHASE/TRANSFER_IN/OPENING_STOCK = received, ISSUE/TRANSFER_OUT = sent out
-          if ((txn.transactionType === 'PURCHASE' || txn.transactionType === 'TRANSFER_IN' || txn.transactionType === 'OPENING_STOCK') && qtyIn > 0) {
+          // Store: PURCHASE/OPENING_STOCK = always received, TRANSFER_IN only if source is Store
+          if ((txn.transactionType === 'PURCHASE' || txn.transactionType === 'OPENING_STOCK') && qtyIn > 0) {
             itemMap[iid].totalReceived += qtyIn;
+          }
+          if (txn.transactionType === 'TRANSFER_IN' && qtyIn > 0) {
+            const srcType = txn.referenceId ? tcSourceDeptMap[txn.referenceId] : '';
+            if (srcType === 'Store') {
+              itemMap[iid].totalReceived += qtyIn;
+            }
+            // Dharamshala source = return, don't add to pool
           }
           if ((txn.transactionType === 'ISSUE' || txn.transactionType === 'TRANSFER_OUT') && qtyOut > 0) {
             itemMap[iid].allocatedToRooms += qtyOut;
