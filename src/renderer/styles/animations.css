@@ -1,0 +1,455 @@
+/* Premium Animation System - StockFlow Pro */
+
+/* Respect user's motion preferences */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* === Core Animations === */
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fadeInDown {
+  from { opacity: 0; transform: translateY(-16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideInLeft {
+  from { opacity: 0; transform: translateX(-20px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes slideInRight {
+  from { opacity: 0; transform: translateX(20px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes scaleIn {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes pulseSoft {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+@keyframes staggerFadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Premium: Gradient shimmer for loading states */
+@keyframes gradientShimmer {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+/* Premium: Smooth number count effect */
+@keyframes countUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Premium: Subtle glow pulse */
+@keyframes glowPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(37, 99, 235, 0); }
+  50% { box-shadow: 0 0 16px 4px rgba(37, 99, 235, 0.15); }
+}
+
+/* Premium: Border gradient animation */
+@keyframes borderGradient {
+  0% { border-color: #2563EB; }
+  33% { border-color: #7C3AED; }
+  66% { border-color: #0EA5E9; }
+  100% { border-color: #2563EB; }
+}
+
+/* === Animation Utility Classes === */
+
+.animate-fadeIn {
+  animation: fadeIn 200ms ease-out forwards;
+}
+
+.animate-fadeInUp {
+  animation: fadeInUp 250ms ease-out forwards;
+}
+
+.animate-fadeInDown {
+  animation: fadeInDown 250ms ease-out forwards;
+}
+
+.animate-slideInLeft {
+  animation: slideInLeft 250ms ease-out forwards;
+}
+
+.animate-slideInRight {
+  animation: slideInRight 250ms ease-out forwards;
+}
+
+.animate-scaleIn {
+  animation: scaleIn 200ms ease-out forwards;
+}
+
+.animate-pulseSoft {
+  animation: pulseSoft 2s ease-in-out infinite;
+}
+
+.animate-shimmer {
+  background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+.animate-glowPulse {
+  animation: glowPulse 2s ease-in-out infinite;
+}
+
+/* === Transition Utilities === */
+
+.transition-all {
+  transition: all 200ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.transition-colors {
+  transition: color 200ms ease-out, background-color 200ms ease-out, border-color 200ms ease-out;
+}
+
+.transition-transform {
+  transition: transform 200ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.transition-shadow {
+  transition: box-shadow 250ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* === Premium Hover Effects === */
+
+.hover-lift {
+  transition: transform 250ms cubic-bezier(0.4, 0, 0.2, 1), box-shadow 250ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.hover-lift:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.08), 0 8px 10px -6px rgba(0, 0, 0, 0.04);
+}
+
+.hover-glow {
+  transition: box-shadow 250ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.hover-glow:hover {
+  box-shadow: 0 0 20px rgba(37, 99, 235, 0.3);
+}
+
+.hover-border-gradient {
+  transition: border-color 300ms ease;
+}
+
+.hover-border-gradient:hover {
+  animation: borderGradient 2s linear infinite;
+}
+
+/* === Page Transitions === */
+
+.page-enter {
+  animation: fadeInUp 300ms cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+/* === Table Effects === */
+
+.table-row-enter {
+  animation: staggerFadeIn 200ms ease-out forwards;
+  opacity: 0;
+}
+
+/* === Card Premium Effects === */
+
+.card-hover {
+  transition: transform 250ms cubic-bezier(0.4, 0, 0.2, 1), box-shadow 250ms cubic-bezier(0.4, 0, 0.2, 1), border-color 250ms ease;
+}
+
+.card-hover:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.08), 0 8px 10px -6px rgba(0, 0, 0, 0.04);
+}
+
+/* Premium: Card with gradient top border on hover */
+.card-gradient-hover {
+  position: relative;
+  overflow: visible;
+}
+
+.card-gradient-hover::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  border-radius: 16px 16px 0 0;
+  background: linear-gradient(90deg, #2563EB, #7C3AED);
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
+
+.card-gradient-hover:hover::before {
+  opacity: 1;
+}
+
+/* === Button Effects === */
+
+.button-press {
+  transition: transform 100ms ease-out;
+}
+
+.button-press:active {
+  transform: scale(0.98);
+}
+
+/* === Sidebar Effects === */
+
+.sidebar-item {
+  transition: background-color 150ms ease-out, color 150ms ease-out, padding-left 150ms ease-out, transform 150ms ease-out;
+}
+
+.sidebar-item:hover {
+  transform: translateX(4px);
+}
+
+/* === Dialog Effects === */
+
+.dialog-enter {
+  animation: scaleIn 200ms ease-out forwards;
+}
+
+/* === Snackbar Effects === */
+
+.snackbar-enter {
+  animation: fadeInDown 200ms ease-out forwards;
+}
+
+/* === Tooltip Effects === */
+
+.tooltip-enter {
+  animation: fadeIn 150ms ease-out forwards;
+}
+
+/* === Loading States === */
+
+.loading-spin {
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.count-up {
+  animation: countUp 300ms ease-out forwards;
+}
+
+/* Skeleton loading */
+.skeleton {
+  background: linear-gradient(90deg, #E2E8F0 25%, #CBD5E1 50%, #E2E8F0 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: 8px;
+}
+
+/* Premium: Gradient skeleton */
+.skeleton-gradient {
+  background: linear-gradient(90deg, #E2E8F0 0%, #F1F5F9 50%, #E2E8F0 100%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+  border-radius: 8px;
+}
+
+/* === Focus States === */
+
+.focus-ring:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.3);
+  transition: box-shadow 150ms ease-out;
+}
+
+/* Global focus-visible for keyboard navigation */
+*:focus-visible {
+  outline: 2px solid #2563EB;
+  outline-offset: 2px;
+}
+
+/* Remove focus ring for mouse users */
+*:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* === Scroll Reveal === */
+
+.reveal {
+  opacity: 0;
+  transform: translateY(20px);
+  transition: opacity 400ms ease-out, transform 400ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.reveal.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* === Premium Micro-Interactions === */
+
+/* Glassmorphism effect */
+.glass {
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+}
+
+/* Gradient text */
+.gradient-text {
+  background: linear-gradient(135deg, #2563EB, #7C3AED);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Animated gradient border */
+.animated-border {
+  position: relative;
+}
+
+.animated-border::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  background: linear-gradient(135deg, #2563EB, #7C3AED, #0EA5E9, #2563EB);
+  background-size: 300% 300%;
+  animation: gradientShimmer 3s ease infinite;
+  z-index: -1;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.animated-border:hover::after {
+  opacity: 1;
+}
+
+/* === Keyboard Shortcut Indicator === */
+
+.kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  font-family: 'Inter', monospace;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  border-radius: 4px;
+  border: 1px solid #E2E8F0;
+  background: #F8FAFC;
+  color: #64748B;
+  box-shadow: 0 1px 0 #E2E8F0;
+}
+
+/* === Premium Ripple Effect on Click === */
+
+@keyframes ripple {
+  to {
+    transform: scale(4);
+    opacity: 0;
+  }
+}
+
+.ripple-effect {
+  position: relative;
+  overflow: hidden;
+}
+
+.ripple-effect::after {
+  content: '';
+  position: absolute;
+  border-radius: 50%;
+  background: rgba(37, 99, 235, 0.12);
+  width: 100px;
+  height: 100px;
+  margin-top: -50px;
+  margin-left: -50px;
+  top: 50%;
+  left: 50%;
+  transform: scale(0);
+  opacity: 1;
+  pointer-events: none;
+}
+
+.ripple-effect:active::after {
+  animation: ripple 0.5s ease-out;
+}
+
+/* === Stagger Animation for Lists === */
+
+.stagger-item {
+  opacity: 0;
+  animation: staggerFadeIn 250ms ease-out forwards;
+}
+
+.stagger-item:nth-child(1) { animation-delay: 0ms; }
+.stagger-item:nth-child(2) { animation-delay: 30ms; }
+.stagger-item:nth-child(3) { animation-delay: 60ms; }
+.stagger-item:nth-child(4) { animation-delay: 90ms; }
+.stagger-item:nth-child(5) { animation-delay: 120ms; }
+.stagger-item:nth-child(6) { animation-delay: 150ms; }
+.stagger-item:nth-child(7) { animation-delay: 180ms; }
+.stagger-item:nth-child(8) { animation-delay: 210ms; }
+.stagger-item:nth-child(9) { animation-delay: 240ms; }
+.stagger-item:nth-child(10) { animation-delay: 270ms; }
+
+/* === Smooth scrolling for main content === */
+
+html {
+  scroll-behavior: smooth;
+}
+
+/* === Selection color === */
+
+::selection {
+  background: rgba(37, 99, 235, 0.15);
+  color: inherit;
+}
+
+/* === Placeholder style for inputs === */
+
+input::placeholder,
+textarea::placeholder {
+  opacity: 0.6;
+}
+
+/* === Print styles === */
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+}

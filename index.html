@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Mahaveerji Inventory Management</title>
+    <link rel="icon" type="image/png" href="/icon.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      body {
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+        overflow: hidden;
+        background: #F8FAFC;
+        transition: background-color 0.3s ease;
+      }
+      @media (prefers-color-scheme: dark) {
+        body { background: #0F172A; }
+        .splash-loader { background: #0F172A; }
+        .splash-loader .text { color: #94A3B8; }
+      }
+      #root { height: 100vh; overflow: auto; }
+      ::-webkit-scrollbar { width: 6px; height: 6px; }
+      ::-webkit-scrollbar-track { background: transparent; }
+      ::-webkit-scrollbar-thumb { background: #CBD5E1; border-radius: 3px; }
+      ::-webkit-scrollbar-thumb:hover { background: #94A3B8; }
+      ::selection { background: rgba(37, 99, 235, 0.15); color: inherit; }
+      .splash-loader {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        height: 100vh;
+        gap: 16px;
+        background: #F8FAFC;
+      }
+      .splash-loader .spinner-circle {
+        width: 56px;
+        height: 56px;
+        border-radius: 50%;
+        background: #EFF6FF;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .splash-loader .spinner {
+        width: 32px; height: 32px;
+        border: 3px solid #BFDBFE;
+        border-top-color: #2563EB;
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+      }
+      .splash-loader .text {
+        color: #64748B;
+        font-size: 14px;
+        font-weight: 500;
+        letter-spacing: 0.02em;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      @media print {
+        body { overflow: visible; background: #fff; }
+        #root { overflow: visible; height: auto; }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root">
+      <div class="splash-loader">
+        <div class="spinner-circle">
+          <div class="spinner"></div>
+        </div>
+        <div class="text">Loading Mahaveerji Inventory...</div>
+      </div>
+    </div>
+    <script type="module" src="/src/renderer/main.tsx"></script>
+  </body>
+</html>

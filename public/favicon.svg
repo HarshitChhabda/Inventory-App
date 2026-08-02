@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1e3a5f"/>
+      <stop offset="50%" stop-color="#2563eb"/>
+      <stop offset="100%" stop-color="#3b82f6"/>
+    </linearGradient>
+    <linearGradient id="boxFront" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#60a5fa"/>
+      <stop offset="100%" stop-color="#2563eb"/>
+    </linearGradient>
+    <linearGradient id="boxTop" x1="0%" y1="100%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#93c5fd"/>
+      <stop offset="100%" stop-color="#60a5fa"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="130%" height="140%">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#0f172a" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+
+  <!-- Background circle -->
+  <circle cx="256" cy="256" r="252" fill="url(#bg)"/>
+
+  <!-- Box group with shadow -->
+  <g filter="url(#shadow)">
+    <!-- Box front face -->
+    <rect x="138" y="218" width="236" height="148" rx="10" fill="url(#boxFront)"/>
+
+    <!-- Box top face (open lid) -->
+    <path d="M138 218 L168 180 L344 180 L374 218 Z" fill="url(#boxTop)"/>
+
+    <!-- Left flap -->
+    <path d="M138 218 L108 180 L168 180 Z" fill="#93c5fd" opacity="0.9"/>
+
+    <!-- Right flap -->
+    <path d="M374 218 L404 180 L344 180 Z" fill="#60a5fa" opacity="0.8"/>
+  </g>
+
+  <!-- Inner box depth line -->
+  <rect x="168" y="218" width="176" height="6" rx="3" fill="#1e40af" opacity="0.35"/>
+
+  <!-- Inventory detail lines -->
+  <rect x="170" y="254" width="72" height="5" rx="2.5" fill="#ffffff" opacity="0.3"/>
+  <rect x="170" y="270" width="52" height="5" rx="2.5" fill="#ffffff" opacity="0.22"/>
+  <rect x="170" y="286" width="88" height="5" rx="2.5" fill="#ffffff" opacity="0.16"/>
+
+  <!-- Subtle accent on front face -->
+  <rect x="310" y="252" width="36" height="36" rx="6" fill="#ffffff" opacity="0.15"/>
+  <line x1="318" y1="262" x2="338" y2="262" stroke="#ffffff" stroke-width="3" stroke-linecap="round" opacity="0.3"/>
+  <line x1="318" y1="272" x2="332" y2="272" stroke="#ffffff" stroke-width="3" stroke-linecap="round" opacity="0.25"/>
+  <line x1="318" y1="282" x2="336" y2="282" stroke="#ffffff" stroke-width="3" stroke-linecap="round" opacity="0.2"/>
+</svg>

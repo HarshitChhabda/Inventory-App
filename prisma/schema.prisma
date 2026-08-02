@@ -1,0 +1,616 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Company {
+  id                   Int                   @id @default(autoincrement())
+  uuid                 String                @unique @default(uuid())
+  name                 String                @unique
+  address              String?
+  phone                String?
+  logoPath             String?
+  isActive             Boolean               @default(true)
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
+  auditLogs            AuditLog[]
+  departments          Department[]
+  financialYears       FinancialYear[]
+  issueChallans        IssueChallan[]
+  receiptChallans      ReceiptChallan[]
+  stockAdjustments     StockAdjustment[]
+  stockTransactions    StockTransaction[]
+  transferChallans     TransferChallan[]
+  vendorReturnChallans VendorReturnChallan[]
+  importHistories      ImportHistory[]
+  challanSequences     ChallanSequence[]
+  damageEntries        DamageEntry[]
+}
+
+model FinancialYear {
+  id                   Int                   @id @default(autoincrement())
+  uuid                 String                @unique @default(uuid())
+  companyId            Int
+  label                String
+  startDate            DateTime
+  endDate              DateTime
+  isClosed             Boolean               @default(false)
+  closedAt             DateTime?
+  createdAt            DateTime              @default(now())
+  company              Company               @relation(fields: [companyId], references: [id])
+  issueChallans        IssueChallan[]
+  openingStocks        OpeningStock[]
+  receiptChallans      ReceiptChallan[]
+  stockAdjustments     StockAdjustment[]
+  stockTransactions    StockTransaction[]
+  transferChallans     TransferChallan[]
+  vendorReturnChallans VendorReturnChallan[]
+  importHistories      ImportHistory[]
+  challanSequences     ChallanSequence[]
+
+  @@unique([companyId, label])
+  @@index([companyId])
+}
+
+model Department {
+  id                Int                @id @default(autoincrement())
+  uuid              String             @unique @default(uuid())
+  companyId         Int
+  name              String
+  code              String?
+  departmentType    String             @default("Store")
+  isActive          Boolean            @default(true)
+  company           Company            @relation(fields: [companyId], references: [id])
+  issueSourceStores IssueChallan[]     @relation("IssueSourceStore")
+  issueChallans     IssueChallan[]
+  itemCategories    ItemCategory[]
+  receiptChallans   ReceiptChallan[]
+  stockAdjustments  StockAdjustment[]
+  stockTransactions StockTransaction[]
+  toTransfers       TransferChallan[]  @relation("ToDepartment")
+  fromTransfers     TransferChallan[]  @relation("FromDepartment")
+
+  @@unique([companyId, name])
+  @@index([companyId])
+}
+
+model ItemCategory {
+  id           Int         @id @default(autoincrement())
+  uuid         String      @unique @default(uuid())
+  name         String      @unique
+  prefix       String      @unique @default("GEN")
+  isActive     Boolean     @default(true)
+  departmentId Int?
+  items        Item[]
+  department   Department? @relation(fields: [departmentId], references: [id])
+
+  @@index([departmentId])
+}
+
+model Unit {
+  id                  Int                  @id @default(autoincrement())
+  uuid                String               @unique @default(uuid())
+  name                String               @unique
+  symbol              String?
+  issueChallanItems   IssueChallanItem[]
+  items               Item[]
+  receiptChallanItems ReceiptChallanItem[]
+}
+
+model Item {
+  id                   Int                       @id @default(autoincrement())
+  uuid                 String                    @unique @default(uuid())
+  itemCode             String                    @unique
+  itemName             String
+  categoryId           Int
+  unitId               Int
+  minimumStockLevel    Decimal                   @default(0)
+  isActive             Boolean                   @default(true)
+  createdAt            DateTime                  @default(now())
+  updatedAt            DateTime                  @updatedAt
+  assetInstallations   AssetInstallation[]
+  damageEntries        DamageEntry[]
+  issueChallanItems    IssueChallanItem[]
+  unit                 Unit                      @relation(fields: [unitId], references: [id])
+  category             ItemCategory              @relation(fields: [categoryId], references: [id])
+  openingStocks        OpeningStock[]
+  receiptChallanItems  ReceiptChallanItem[]
+  stockAdjustments     StockAdjustment[]
+  stockTransactions    StockTransaction[]
+  transferChallanItems TransferChallanItem[]
+  vendorReturnItems    VendorReturnChallanItem[]
+
+  @@index([categoryId])
+  @@index([isActive])
+}
+
+model Vendor {
+  id                   Int                   @id @default(autoincrement())
+  uuid                 String                @unique @default(uuid())
+  name                 String
+  contactPerson        String?
+  phone                String?
+  address              String?
+  gstNumber            String?
+  isActive             Boolean               @default(true)
+  createdAt            DateTime              @default(now())
+  receiptChallans      ReceiptChallan[]
+  vendorReturnChallans VendorReturnChallan[]
+}
+
+model Location {
+  id                      Int                   @id @default(autoincrement())
+  uuid                    String                @unique @default(uuid())
+  locationType            String
+  locationName            String
+  category                String?
+  floor                   String?
+  parentId                Int?
+  isActive                Boolean               @default(true)
+  assetInstallations      AssetInstallation[]
+  damageEntries           DamageEntry[]
+  issueChallanItems       IssueChallanItem[]
+  parent                  Location?             @relation("LocationHierarchy", fields: [parentId], references: [id])
+  children                Location[]            @relation("LocationHierarchy")
+  receiptChallanItems     ReceiptChallanItem[]
+  stockAdjustments        StockAdjustment[]
+  stockTransactions       StockTransaction[]
+  transferToLocationItems TransferChallanItem[] @relation("TransferToLocation")
+  transferChallanItems    TransferChallanItem[]
+
+  @@index([locationType])
+}
+
+model ReceiptChallan {
+  id              Int                   @id @default(autoincrement())
+  uuid            String                @unique @default(uuid())
+  challanNo       String
+  companyId       Int
+  financialYearId Int
+  date            DateTime
+  sourceType      String
+  vendorId        Int?
+  sourceName      String?
+  invoiceNumber   String?
+  invoiceDate     DateTime?
+  vehicleNumber   String?
+  receivedBy      String
+  departmentId    Int?
+  remarks         String?
+  status          String                @default("Draft")
+  postedAt        DateTime?
+  postedBy        String?
+  cancelledAt     DateTime?
+  cancelReason    String?
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+  department      Department?           @relation(fields: [departmentId], references: [id])
+  vendor          Vendor?               @relation(fields: [vendorId], references: [id])
+  financialYear   FinancialYear         @relation(fields: [financialYearId], references: [id])
+  company         Company               @relation(fields: [companyId], references: [id])
+  items           ReceiptChallanItem[]
+  vendorReturns   VendorReturnChallan[]
+
+  @@unique([companyId, financialYearId, challanNo])
+  @@index([companyId])
+  @@index([financialYearId])
+  @@index([date])
+  @@index([status])
+  @@index([vendorId])
+  @@index([companyId, financialYearId])
+  @@index([companyId, financialYearId, status])
+  @@index([companyId, financialYearId, date])
+}
+
+model ReceiptChallanItem {
+  id               Int            @id @default(autoincrement())
+  uuid             String         @unique @default(uuid())
+  receiptChallanId Int
+  itemId           Int
+  unitId           Int
+  quantity         Decimal
+  rate             Decimal        @default(0)
+  amount           Decimal        @default(0)
+  locationId       Int?
+  remarks          String?
+  location         Location?      @relation(fields: [locationId], references: [id])
+  unit             Unit           @relation(fields: [unitId], references: [id])
+  item             Item           @relation(fields: [itemId], references: [id])
+  receiptChallan   ReceiptChallan @relation(fields: [receiptChallanId], references: [id])
+
+  @@index([receiptChallanId])
+  @@index([itemId])
+}
+
+model IssueChallan {
+  id              Int                @id @default(autoincrement())
+  uuid            String             @unique @default(uuid())
+  challanNo       String
+  companyId       Int
+  financialYearId Int
+  departmentId    Int
+  sourceStoreId   Int?
+  date            DateTime
+  issuedBy        String
+  approvedBy      String?
+  purpose         String?
+  remarks         String?
+  status          String             @default("Draft")
+  postedAt        DateTime?
+  postedBy        String?
+  cancelledAt     DateTime?
+  cancelReason    String?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  serialNo        String?
+  sourceStore     Department?        @relation("IssueSourceStore", fields: [sourceStoreId], references: [id])
+  department      Department         @relation(fields: [departmentId], references: [id])
+  financialYear   FinancialYear      @relation(fields: [financialYearId], references: [id])
+  company         Company            @relation(fields: [companyId], references: [id])
+  items           IssueChallanItem[]
+
+  @@unique([companyId, financialYearId, challanNo])
+  @@index([companyId])
+  @@index([financialYearId])
+  @@index([departmentId])
+  @@index([sourceStoreId])
+  @@index([date])
+  @@index([status])
+  @@index([companyId, financialYearId])
+  @@index([companyId, financialYearId, status])
+  @@index([companyId, financialYearId, departmentId])
+}
+
+model IssueChallanItem {
+  id             Int          @id @default(autoincrement())
+  uuid           String       @unique @default(uuid())
+  issueChallanId Int
+  itemId         Int
+  unitId         Int
+  quantity       Decimal
+  locationId     Int?
+  usedAt         String?
+  purpose        String?
+  remarks        String?
+  location       Location?    @relation(fields: [locationId], references: [id])
+  unit           Unit         @relation(fields: [unitId], references: [id])
+  item           Item         @relation(fields: [itemId], references: [id])
+  issueChallan   IssueChallan @relation(fields: [issueChallanId], references: [id])
+
+  @@index([issueChallanId])
+  @@index([itemId])
+  @@index([locationId])
+}
+
+model TransferChallan {
+  id               Int                   @id @default(autoincrement())
+  uuid             String                @unique @default(uuid())
+  challanNo        String
+  companyId        Int
+  financialYearId  Int
+  date             DateTime
+  fromDepartmentId Int
+  toDepartmentId   Int
+  transferredBy    String
+  approvedBy       String?
+  remarks          String?
+  status           String                @default("Draft")
+  postedAt         DateTime?
+  postedBy         String?
+  cancelledAt      DateTime?
+  cancelReason     String?
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+  toDepartment     Department            @relation("ToDepartment", fields: [toDepartmentId], references: [id])
+  fromDepartment   Department            @relation("FromDepartment", fields: [fromDepartmentId], references: [id])
+  financialYear    FinancialYear         @relation(fields: [financialYearId], references: [id])
+  company          Company               @relation(fields: [companyId], references: [id])
+  items            TransferChallanItem[]
+
+  @@unique([companyId, financialYearId, challanNo])
+  @@index([companyId])
+  @@index([financialYearId])
+  @@index([fromDepartmentId])
+  @@index([toDepartmentId])
+  @@index([date])
+  @@index([status])
+  @@index([companyId, financialYearId])
+  @@index([companyId, financialYearId, status])
+}
+
+model TransferChallanItem {
+  id                Int             @id @default(autoincrement())
+  uuid              String          @unique @default(uuid())
+  transferChallanId Int
+  itemId            Int
+  quantity          Decimal
+  rate              Decimal         @default(0)
+  locationId        Int?
+  toLocationId      Int?
+  remarks           String?
+  toLocation        Location?       @relation("TransferToLocation", fields: [toLocationId], references: [id])
+  location          Location?       @relation(fields: [locationId], references: [id])
+  item              Item            @relation(fields: [itemId], references: [id])
+  transferChallan   TransferChallan @relation(fields: [transferChallanId], references: [id])
+
+  @@index([transferChallanId])
+  @@index([itemId])
+  @@index([locationId])
+  @@index([toLocationId])
+}
+
+model StockTransaction {
+  id              Int           @id @default(autoincrement())
+  uuid            String        @unique @default(uuid())
+  companyId       Int
+  financialYearId Int
+  itemId          Int
+  departmentId    Int?
+  locationId      Int?
+  transactionType String
+  transactionDate DateTime
+  quantityIn      Decimal       @default(0)
+  quantityOut     Decimal       @default(0)
+  rate            Decimal       @default(0)
+  balanceQty      Decimal
+  referenceType   String?
+  referenceId     Int?
+  referenceNo     String?
+  remarks         String?
+  createdAt       DateTime      @default(now())
+  createdBy       String
+  condition       String?       @default("GOOD")
+  refTransferId   String?
+  location        Location?     @relation(fields: [locationId], references: [id])
+  department      Department?   @relation(fields: [departmentId], references: [id])
+  item            Item          @relation(fields: [itemId], references: [id])
+  financialYear   FinancialYear @relation(fields: [financialYearId], references: [id])
+  company         Company       @relation(fields: [companyId], references: [id])
+
+  @@index([companyId, financialYearId, itemId])
+  @@index([companyId, financialYearId, transactionType])
+  @@index([companyId, financialYearId, transactionDate])
+  @@index([itemId, transactionType])
+  @@index([referenceType, referenceId])
+  @@index([createdAt])
+  @@index([departmentId])
+  @@index([locationId])
+  @@index([refTransferId])
+  @@index([itemId, locationId, id])
+  @@index([condition])
+  @@index([itemId, transactionDate])
+  @@index([companyId, itemId])
+}
+
+model OpeningStock {
+  id              Int           @id @default(autoincrement())
+  uuid            String        @unique @default(uuid())
+  financialYearId Int
+  itemId          Int
+  quantity        Decimal
+  rate            Decimal       @default(0)
+  createdAt       DateTime      @default(now())
+  item            Item          @relation(fields: [itemId], references: [id])
+  financialYear   FinancialYear @relation(fields: [financialYearId], references: [id])
+
+  @@unique([financialYearId, itemId])
+  @@index([financialYearId])
+  @@index([itemId])
+}
+
+model AssetInstallation {
+  id             Int      @id @default(autoincrement())
+  uuid           String   @unique @default(uuid())
+  itemId         Int
+  locationId     Int
+  issueChallanId Int?
+  installedDate  DateTime
+  quantity       Decimal
+  installedBy    String?
+  status         String   @default("Active")
+  remarks        String?
+  createdAt      DateTime @default(now())
+  location       Location @relation(fields: [locationId], references: [id])
+  item           Item     @relation(fields: [itemId], references: [id])
+
+  @@index([itemId])
+  @@index([locationId])
+  @@index([status])
+}
+
+model DamageEntry {
+  id                    Int       @id @default(autoincrement())
+  uuid                  String    @unique @default(uuid())
+  companyId             Int?
+  itemId                Int
+  locationId            Int?
+  assetInstallationId   Int?
+  date                  DateTime
+  quantity              Decimal
+  reason                String
+  reportedBy            String
+  remarks               String?
+  originalPurchaseDate  DateTime?
+  originalVendorName    String?
+  originalInvoiceNumber String?
+  originalRate          Decimal?
+  status                String    @default("Posted")
+  createdAt             DateTime  @default(now())
+  location              Location? @relation(fields: [locationId], references: [id])
+  item                  Item      @relation(fields: [itemId], references: [id])
+  company               Company?  @relation(fields: [companyId], references: [id])
+
+  @@index([companyId])
+  @@index([itemId])
+  @@index([locationId])
+  @@index([date])
+}
+
+model StockAdjustment {
+  id              Int           @id @default(autoincrement())
+  uuid            String        @unique @default(uuid())
+  companyId       Int
+  financialYearId Int
+  departmentId    Int?
+  locationId      Int?
+  date            DateTime
+  itemId          Int
+  adjustmentType  String
+  quantity        Decimal
+  reason          String
+  adjustedBy      String
+  approvedBy      String?
+  remarks         String?
+  status          String        @default("Posted")
+  createdAt       DateTime      @default(now())
+  location        Location?     @relation(fields: [locationId], references: [id])
+  department      Department?   @relation(fields: [departmentId], references: [id])
+  item            Item          @relation(fields: [itemId], references: [id])
+  financialYear   FinancialYear @relation(fields: [financialYearId], references: [id])
+  company         Company       @relation(fields: [companyId], references: [id])
+
+  @@index([companyId, financialYearId])
+  @@index([itemId])
+  @@index([departmentId])
+  @@index([locationId])
+  @@index([companyId, financialYearId, itemId])
+}
+
+model VendorReturnChallan {
+  id                Int                       @id @default(autoincrement())
+  uuid              String                    @unique @default(uuid())
+  challanNo         String
+  companyId         Int
+  financialYearId   Int
+  vendorId          Int
+  originalReceiptId Int?
+  date              DateTime
+  reason            String
+  returnedBy        String
+  remarks           String?
+  status            String                    @default("Draft")
+  postedAt          DateTime?
+  postedBy          String?
+  cancelledAt       DateTime?
+  cancelReason      String?
+  createdAt         DateTime                  @default(now())
+  updatedAt         DateTime                  @updatedAt
+  originalReceipt   ReceiptChallan?           @relation(fields: [originalReceiptId], references: [id])
+  vendor            Vendor                    @relation(fields: [vendorId], references: [id])
+  financialYear     FinancialYear             @relation(fields: [financialYearId], references: [id])
+  company           Company                   @relation(fields: [companyId], references: [id])
+  items             VendorReturnChallanItem[]
+
+  @@unique([companyId, financialYearId, challanNo])
+  @@index([companyId])
+  @@index([financialYearId])
+  @@index([vendorId])
+  @@index([date])
+  @@index([status])
+  @@index([companyId, financialYearId])
+  @@index([companyId, financialYearId, status])
+}
+
+model VendorReturnChallanItem {
+  id                    Int                 @id @default(autoincrement())
+  uuid                  String              @unique @default(uuid())
+  vendorReturnChallanId Int
+  itemId                Int
+  quantity              Decimal
+  rate                  Decimal             @default(0)
+  item                  Item                @relation(fields: [itemId], references: [id])
+  vendorReturnChallan   VendorReturnChallan @relation(fields: [vendorReturnChallanId], references: [id])
+
+  @@index([vendorReturnChallanId])
+  @@index([itemId])
+}
+
+model User {
+  id           Int            @id @default(autoincrement())
+  uuid         String         @unique @default(uuid())
+  username     String         @unique
+  passwordHash String
+  fullName     String
+  role         String         @default("USER")
+  permissions  String         @default("[]")
+  isActive     Boolean        @default(true)
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+  auditLogs    AuditLog[]
+  loginHistory LoginHistory[]
+}
+
+model LoginHistory {
+  id        Int       @id @default(autoincrement())
+  userId    Int
+  loginAt   DateTime  @default(now())
+  logoutAt  DateTime?
+  ipAddress String?
+  device    String?
+  user      User      @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([loginAt])
+}
+
+model AuditLog {
+  id          Int      @id @default(autoincrement())
+  companyId   Int?
+  userId      Int?
+  action      String
+  tableName   String
+  recordId    Int?
+  recordUuid  String?
+  oldValues   String?
+  newValues   String?
+  description String?
+  createdAt   DateTime @default(now())
+  user        User?    @relation(fields: [userId], references: [id])
+  company     Company? @relation(fields: [companyId], references: [id])
+
+  @@index([companyId])
+  @@index([tableName, recordId])
+  @@index([userId])
+  @@index([createdAt])
+  @@index([action])
+}
+
+model ChallanSequence {
+  id              Int           @id @default(autoincrement())
+  companyId       Int
+  financialYearId Int
+  challanType     String
+  lastNumber      Int           @default(0)
+  company         Company       @relation(fields: [companyId], references: [id])
+  financialYear   FinancialYear @relation(fields: [financialYearId], references: [id])
+
+  @@unique([companyId, financialYearId, challanType])
+}
+
+model ImportHistory {
+  id              Int         @id @default(autoincrement())
+  uuid            String      @unique @default(uuid())
+  fileName        String
+  importType      String
+  level           String?
+  departmentId    Int?
+  departmentName  String?
+  rowCount        Int         @default(0)
+  importedCount   Int         @default(0)
+  status          String      @default("completed")
+  companyId       Int
+  financialYearId Int
+  createdAt       DateTime    @default(now())
+  deletedAt       DateTime?
+  company         Company     @relation(fields: [companyId], references: [id])
+  financialYear   FinancialYear @relation(fields: [financialYearId], references: [id])
+
+  @@index([companyId])
+  @@index([financialYearId])
+  @@index([importType])
+  @@index([status])
+}

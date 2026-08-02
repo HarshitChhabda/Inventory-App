@@ -1,0 +1,791 @@
+import React, { useState } from 'react';
+import {
+  Box, Typography, Button, Table, TableBody, TableCell, TableContainer,
+  TableHead, TableRow, Paper, Stack, Alert, Chip, alpha, useTheme,
+  Dialog, DialogTitle, DialogContent, DialogActions, CircularProgress,
+  FormControl, InputLabel, Select, MenuItem, Tab, Tabs, Divider,
+  IconButton, Tooltip,
+} from '@mui/material';
+import {
+  Backup, Restore, FolderOpen, CloudUpload, FileDownload, FileUpload,
+  TableChart, Description, Inventory, Info, HomeWork, Delete, Warning,
+} from '@mui/icons-material';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import PageHeader from '../../components/PageHeader';
+import EmptyState from '../../components/EmptyState';
+import { TableSkeleton } from '../../components/LoadingSkeleton';
+import { formatDateDDMMYYYY, todayISO } from '../../utils/dateUtils';
+import { downloadBuffer } from '../../utils/importExport';
+import { useCompany } from '../../context/CompanyContext';
+import toast from 'react-hot-toast';
+
+export default function BackupPage() {
+  const queryClient = useQueryClient();
+  const theme = useTheme();
+  const { company, financialYear } = useCompany();
+  const [importDialog, setImportDialog] = useState(false);
+  const [importModel, setImportModel] = useState('');
+  const [importRows, setImportRows] = useState<any[]>([]);
+  const [importHeaders, setImportHeaders] = useState<string[]>([]);
+  const [importing, setImporting] = useState(false);
+  const [activeTab, setActiveTab] = useState(0);
+  const [backupInfoDialog, setBackupInfoDialog] = useState(false);
+  const [openingStockRows, setOpeningStockRows] = useState<any[]>([]);
+  const [openingStockImporting, setOpeningStockImporting] = useState(false);
+  const [importHistory, setImportHistory] = useState<any[]>([]);
+  const [deleteDialog, setDeleteDialog] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<any>(null);
+  const [deleting, setDeleting] = useState(false);
+  const { data: backups, isLoading } = useQuery({
+    queryKey: ['backups'],
+    queryFn: () => window.electronAPI.listBackups(),
+  });
+
+  const { data: tables } = useQuery({
+    queryKey: ['importTables'],
+    queryFn: () => window.electronAPI.getImportTables(),
+  });
+
+  const { data: backupInfo, isLoading: backupInfoLoading } = useQuery({
+    queryKey: ['backupInfo'],
+    queryFn: () => window.electronAPI.getBackupInfo(),
+  });
+
+  // Load import history
+  const loadImportHistory = async () => {
+    if (!company?.id) return;
+    try {
+      const history = await window.electronAPI.listImportHistory(company.id);
+      setImportHistory(history);
+    } catch (err) {
+      console.error('Failed to load import history:', err);
+    }
+  };
+
+  // Load history on mount and when company changes
+  React.useEffect(() => {
+    loadImportHistory();
+  }, [company?.id]);
+
+  const createBackupMutation = useMutation({
+    mutationFn: () => window.electronAPI.createBackup(),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['backups'] });
+      toast.success('Backup created successfully!');
+    },
+  });
+
+  const restoreMutation = useMutation({
+    mutationFn: (path: string) => window.electronAPI.restoreBackup(path),
+  });
+
+  const exportAllMutation = useMutation({
+    mutationFn: async () => {
+      const buffer = await window.electronAPI.exportAllTablesComplete();
+      downloadBuffer(buffer, `inventory-complete-backup-${todayISO()}.xlsx`);
+    },
+    onSuccess: () => toast.success('Complete backup exported!'),
+    onError: (err: any) => toast.error('Export failed: ' + err.message),
+  });
+
+  const handleDownloadOpeningStockTemplate = async () => {
+    try {
+      const buffer = await window.electronAPI.generateOpeningStockTemplate('simple');
+      downloadBuffer(buffer, `stock-import-template.xlsx`);
+      toast.success('Stock import template downloaded!');
+    } catch (err: any) {
+      toast.error('Failed: ' + err.message);
+    }
+  };
+
+  const handleImportOpeningStockFile = async () => {
+    try {
+      const result = await window.electronAPI.openFile({
+        title: 'Import Opening Stock',
+        filters: [{ name: 'Excel', extensions: ['xlsx'] }],
+        properties: ['openFile'],
+      });
+      if (result.canceled || !result.filePaths?.[0]) return;
+      const filePath = result.filePaths[0];
+      const fileName = filePath.split(/[\\/]/).pop() || '';
+      const buffer = await window.electronAPI.readFileBuffer(filePath);
+      const parsed = await window.electronAPI.parseImportFile(buffer, fileName);
+      if (parsed.rows.length === 0) {
+        toast.error('No data found in file');
+        return;
+      }
+      setOpeningStockRows(parsed.rows);
+    } catch (err: any) {
+      toast.error('Failed to read file: ' + err.message);
+    }
+  };
+
+  const handleBulkImportOpeningStock = async () => {
+    if (!company?.id || !financialYear?.id) {
+      toast.error('Select a company and financial year first');
+      return;
+    }
+    setOpeningStockImporting(true);
+    try {
+      const rows = openingStockRows.map((r: any) => ({
+        dharamshalaDept: r['Dharamshala/Department'] || r['dharamshalaDept'] || r['dharamshala'] || r['department'] || '',
+        roomLocation: r['Room/Location'] || r['roomLocation'] || r['room'] || r['location'] || '',
+        category: r['Category'] || r['category'] || '',
+        itemCode: r['Item Code'] || r['itemCode'] || r['code'] || '',
+        itemName: r['Item Name'] || r['itemName'] || '',
+        unit: r['Unit'] || r['unit'] || '',
+        quantity: Number(r['Qty'] || r['Quantity'] || r['quantity'] || r['qty'] || 0),
+        rate: Number(r['Rate'] || r['rate'] || 0),
+        date: r['Date'] || r['date'] || '',
+        status: r['Status'] || r['status'] || 'Available',
+        remarks: r['Remarks'] || r['remarks'] || '',
+      }));
+      const result = await window.electronAPI.bulkImportOpeningStock({
+        companyId: company.id,
+        financialYearId: financialYear.id,
+        rows,
+      });
+      if (result.imported > 0) {
+        toast.success(`Imported ${result.imported} of ${result.total} rows`);
+        try {
+          await window.electronAPI.createImportHistory({
+            fileName: `Stock Import (${rows.length} rows)`,
+            importType: 'opening_stock',
+            rowCount: result.total,
+            importedCount: result.imported,
+            companyId: company.id,
+            financialYearId: financialYear.id,
+          });
+          loadImportHistory();
+        } catch (err) {
+          console.error('Failed to save import history:', err);
+        }
+      }
+      if (result.errors?.length > 0) {
+        toast.error(`Errors: ${result.errors.slice(0, 3).join(', ')}`);
+      }
+      setOpeningStockRows([]);
+    } catch (err: any) {
+      toast.error('Import failed: ' + err.message);
+    } finally {
+      setOpeningStockImporting(false);
+    }
+  };
+
+  const handleImportFile = async () => {
+    try {
+      const result = await window.electronAPI.openFile({
+        title: 'Import Data for Restore',
+        filters: [
+          { name: 'Excel/CSV', extensions: ['xlsx', 'csv'] },
+        ],
+        properties: ['openFile'],
+      });
+      if (result.canceled || !result.filePaths?.[0]) return;
+      const filePath = result.filePaths[0];
+      const fileName = filePath.split(/[\\/]/).pop() || '';
+      const buffer = await window.electronAPI.readFileBuffer(filePath);
+      const parsed = await window.electronAPI.parseImportFile(buffer, fileName);
+      if (parsed.rows.length === 0) {
+        toast.error('No data found in file');
+        return;
+      }
+      setImportHeaders(parsed.headers);
+      setImportRows(parsed.rows);
+      setImportDialog(true);
+    } catch (err: any) {
+      toast.error('Failed to read file: ' + err.message);
+    }
+  };
+
+  const handleImportToTable = async () => {
+    if (!importModel) { toast.error('Select a table first'); return; }
+    const table = tables?.find((t: any) => t.model === importModel);
+    if (!table) return;
+    setImporting(true);
+    try {
+      const result = await window.electronAPI.bulkUpsert(importModel, importRows, table.matchField);
+      toast.success(`Import complete: ${result.created} created, ${result.updated} updated, ${result.skipped} skipped`);
+      // Save import history
+      if (company?.id && financialYear?.id) {
+        try {
+          await window.electronAPI.createImportHistory({
+            fileName: `Master Data - ${table.name}`,
+            importType: 'master_data',
+            rowCount: result.total,
+            importedCount: result.created + result.updated,
+            companyId: company.id,
+            financialYearId: financialYear.id,
+          });
+          loadImportHistory();
+        } catch (err) {
+          console.error('Failed to save import history:', err);
+        }
+      }
+      setImportDialog(false);
+      setImportRows([]);
+      setImportModel('');
+    } catch (err: any) {
+      toast.error('Import failed: ' + err.message);
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const handleDownloadTemplate = async (model: string) => {
+    try {
+      const buffer = await window.electronAPI.generateImportTemplate(model);
+      downloadBuffer(buffer, `import-template-${model}.xlsx`);
+      toast.success(`Template downloaded for ${model}`);
+    } catch (err: any) {
+      toast.error('Failed to download template: ' + err.message);
+    }
+  };
+
+  const handleDeleteImport = async () => {
+    if (!deleteTarget || !company?.id || !financialYear?.id) return;
+    setDeleting(true);
+    try {
+      const result = await window.electronAPI.deleteImportHistory({
+        id: deleteTarget.id,
+        companyId: company.id,
+        financialYearId: financialYear.id,
+      });
+      toast.success(result.message);
+      setDeleteDialog(false);
+      setDeleteTarget(null);
+      loadImportHistory();
+    } catch (err: any) {
+      toast.error('Delete failed: ' + err.message);
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const formatSize = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / 1048576).toFixed(1)} MB`;
+  };
+
+  return (
+    <Box>
+      <PageHeader
+        title="Backup & Restore"
+        subtitle="Manage database backups, export/import data, download import templates"
+        actions={
+          <Stack direction="row" spacing={1.5}>
+            <Button
+              variant="outlined"
+              startIcon={<Info />}
+              onClick={() => setBackupInfoDialog(true)}
+            >
+              Backup Details
+            </Button>
+            <Button
+              variant="outlined"
+              startIcon={<FileDownload />}
+              onClick={() => exportAllMutation.mutate()}
+              disabled={exportAllMutation.isPending}
+            >
+              {exportAllMutation.isPending ? 'Exporting...' : 'Complete Excel Backup'}
+            </Button>
+            <Button
+              variant="outlined"
+              startIcon={<FileUpload />}
+              onClick={handleImportFile}
+            >
+              Import Data
+            </Button>
+            <Button
+              variant="outlined"
+              startIcon={<FolderOpen />}
+              onClick={async () => {
+                const dir = await window.electronAPI.getExportsDir();
+                alert(`Exports directory: ${dir}`);
+              }}
+            >
+              Open Folder
+            </Button>
+            <Button
+              variant="contained"
+              startIcon={<Backup />}
+              onClick={() => createBackupMutation.mutate()}
+              disabled={createBackupMutation.isPending}
+            >
+              {createBackupMutation.isPending ? 'Creating...' : 'Create Backup'}
+            </Button>
+          </Stack>
+        }
+      />
+
+      <Alert
+        severity="info"
+        sx={{ mb: 2.5, borderRadius: 2, '& .MuiAlert-icon': { alignItems: 'center' } }}
+      >
+        Backups are automatic every 15 minutes. Daily (30 days), Weekly (12 weeks), Monthly (24 months), Yearly (5 years).
+        "Complete Excel Backup" exports ALL tables with ALL data. Use "Import Data" to restore from Excel/CSV.
+      </Alert>
+
+      <Tabs value={activeTab} onChange={(_, v) => setActiveTab(v)} sx={{ mb: 2 }}>
+        <Tab label="Database Backups" icon={<Backup />} iconPosition="start" />
+        <Tab label="Import Templates" icon={<Description />} iconPosition="start" />
+        <Tab label="Room Stock Import" icon={<HomeWork />} iconPosition="start" />
+      </Tabs>
+
+      {activeTab === 0 && (
+        <>
+          {createBackupMutation.isSuccess && (
+            <Alert severity="success" sx={{ mb: 2, borderRadius: 2 }}>Backup created successfully!</Alert>
+          )}
+
+          {isLoading ? (
+            <TableSkeleton rows={5} columns={5} />
+          ) : (
+            <TableContainer component={Paper}>
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Backup Name</TableCell>
+                    <TableCell>Type</TableCell>
+                    <TableCell>Size</TableCell>
+                    <TableCell>Date</TableCell>
+                    <TableCell align="right">Actions</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {backups?.map((backup: any) => (
+                    <TableRow key={backup.path} hover>
+                      <TableCell>
+                        <Stack direction="row" alignItems="center" spacing={1.5}>
+                          <Box sx={{
+                            width: 32, height: 32, borderRadius: 1.5,
+                            bgcolor: alpha(theme.palette.primary.main, 0.08),
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          }}>
+                            <CloudUpload sx={{ fontSize: 16, color: 'primary.main' }} />
+                          </Box>
+                          <Typography fontWeight={500}>{backup.name}</Typography>
+                        </Stack>
+                      </TableCell>
+                      <TableCell>
+                        <Chip
+                          label={backup.type}
+                          size="small"
+                          color={backup.type === 'daily' ? 'primary' : backup.type === 'weekly' ? 'secondary' : 'warning'}
+                          variant="outlined"
+                        />
+                      </TableCell>
+                      <TableCell>
+                        <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
+                          {formatSize(backup.size)}
+                        </Typography>
+                      </TableCell>
+                      <TableCell>{formatDateDDMMYYYY(backup.date)}</TableCell>
+                      <TableCell align="right">
+                        <Button
+                          size="small"
+                          color="warning"
+                          startIcon={<Restore />}
+                          onClick={() => {
+                            if (confirm('Are you sure you want to restore this backup? The app will restart.')) {
+                              restoreMutation.mutate(backup.path);
+                            }
+                          }}
+                        >
+                          Restore
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                  {(!backups || backups.length === 0) && (
+                    <TableRow>
+                      <TableCell colSpan={5}>
+                        <EmptyState
+                          icon={<Backup />}
+                          title="No backups found"
+                          description="Create your first backup to protect your data"
+                        />
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          )}
+        </>
+      )}
+
+      {activeTab === 1 && (
+        <Box>
+          <Alert severity="info" sx={{ mb: 2.5, borderRadius: 2 }}>
+            Download import templates to see the correct Excel format for each table. Templates include column names, sample data, and instructions.
+          </Alert>
+          <TableContainer component={Paper}>
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  <TableCell>Table</TableCell>
+                  <TableCell>Description</TableCell>
+                  <TableCell>Required Columns</TableCell>
+                  <TableCell align="right">Action</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {tables?.map((table: any) => (
+                  <TableRow key={table.model} hover>
+                    <TableCell>
+                      <Stack direction="row" alignItems="center" spacing={1.5}>
+                        <Box sx={{
+                          width: 32, height: 32, borderRadius: 1.5,
+                          bgcolor: alpha(theme.palette.info.main, 0.08),
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        }}>
+                          <Inventory sx={{ fontSize: 16, color: 'info.main' }} />
+                        </Box>
+                        <Typography fontWeight={500}>{table.name}</Typography>
+                      </Stack>
+                    </TableCell>
+                    <TableCell>
+                      <Typography variant="body2" color="text.secondary">
+                        Match by: {table.matchField}
+                      </Typography>
+                    </TableCell>
+                    <TableCell>
+                      <Stack direction="row" flexWrap="wrap" gap={0.5}>
+                        {table.fields.map((f: string) => (
+                          <Chip key={f} label={f} size="small" variant="outlined" />
+                        ))}
+                      </Stack>
+                    </TableCell>
+                    <TableCell align="right">
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        startIcon={<FileDownload />}
+                        onClick={() => handleDownloadTemplate(table.model)}
+                      >
+                        Download Template
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        </Box>
+      )}
+
+      {activeTab === 2 && (
+        <Box>
+          <Alert severity="info" sx={{ mb: 2.5, borderRadius: 2 }}>
+            Stock import with full details. Template includes: Dharamshala/Department, Room/Location, Category, Item Code, Item Name, Unit, Qty, Rate, Date, Status, Remarks. <br />
+            <strong>Auto-creates:</strong> New items, categories, and units if they don't exist. After import, you can update Unit and Rate anytime from Item Master.
+          </Alert>
+          <Stack direction="row" spacing={2} mb={3} alignItems="center" flexWrap="wrap">
+            <Button
+              variant="outlined"
+              startIcon={<FileDownload />}
+              onClick={handleDownloadOpeningStockTemplate}
+            >
+              Download Template
+            </Button>
+            <Button
+              variant="outlined"
+              startIcon={<FileUpload />}
+              onClick={handleImportOpeningStockFile}
+            >
+              Import Excel File
+            </Button>
+          </Stack>
+
+          {openingStockRows.length > 0 && (
+            <Paper sx={{ p: 2 }}>
+              <Stack direction="row" justifyContent="space-between" alignItems="center" mb={2}>
+                <Typography variant="subtitle1" fontWeight={600}>
+                  Preview: {openingStockRows.length} rows ready to import
+                </Typography>
+                <Button
+                  variant="contained"
+                  startIcon={openingStockImporting ? <CircularProgress size={16} /> : <FileUpload />}
+                  onClick={handleBulkImportOpeningStock}
+                  disabled={openingStockImporting}
+                >
+                  {openingStockImporting ? 'Importing...' : `Import ${openingStockRows.length} Rows`}
+                </Button>
+              </Stack>
+              <TableContainer sx={{ maxHeight: 400 }}>
+                <Table size="small" stickyHeader>
+                  <TableHead>
+                    <TableRow>
+                      {Object.keys(openingStockRows[0] || {}).map((key) => (
+                        <TableCell key={key} sx={{ fontWeight: 700, fontSize: '0.75rem' }}>{key}</TableCell>
+                      ))}
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {openingStockRows.slice(0, 50).map((row: any, idx: number) => (
+                      <TableRow key={idx}>
+                        {Object.keys(row).map((key) => (
+                          <TableCell key={key} sx={{ fontSize: '0.75rem' }}>{String(row[key] ?? '')}</TableCell>
+                        ))}
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+              {openingStockRows.length > 50 && (
+                <Typography variant="caption" color="text.secondary" display="block" mt={1}>
+                  Showing first 50 rows of {openingStockRows.length} total
+                </Typography>
+              )}
+            </Paper>
+          )}
+
+          {/* Undo Import Section */}
+          <Paper sx={{ p: 2, mt: 2, border: '1px dashed', borderColor: 'warning.main' }}>
+            <Typography variant="subtitle1" fontWeight={600} color="warning.main" mb={1}>
+              Undo / Rollback Import
+            </Typography>
+            <Typography variant="body2" color="text.secondary" mb={2}>
+              Galat file import ho gayi? Neeche ke button se last 10 minutes ke saare imports delete ho jayenge.
+            </Typography>
+            <Button
+              variant="outlined"
+              color="error"
+              onClick={async () => {
+                if (!confirm('Last 10 minutes ke saare stock entries delete ho jayenge. Confirm?')) return;
+                try {
+                  const result = await window.electronAPI.undoOpeningStockImport({
+                    companyId: company!.id,
+                    financialYearId: financialYear!.id,
+                    minutes: 10,
+                  });
+                  toast.success(result.message);
+                  loadImportHistory();
+                } catch (err: any) {
+                  toast.error('Undo failed: ' + err.message);
+                }
+              }}
+            >
+              Undo Last 10 Minutes
+            </Button>
+          </Paper>
+
+          {/* Import History Section */}
+          <Paper sx={{ p: 2, mt: 2 }}>
+            <Stack direction="row" justifyContent="space-between" alignItems="center" mb={2}>
+              <Typography variant="subtitle1" fontWeight={600}>
+                Import History
+              </Typography>
+              <Button size="small" onClick={loadImportHistory}>Refresh</Button>
+            </Stack>
+            {importHistory.length === 0 ? (
+              <Alert severity="info">No imports recorded yet.</Alert>
+            ) : (
+              <TableContainer>
+                <Table size="small">
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>File / Import</TableCell>
+                      <TableCell>Level</TableCell>
+                      <TableCell>Department</TableCell>
+                      <TableCell align="right">Rows</TableCell>
+                      <TableCell align="right">Imported</TableCell>
+                      <TableCell>Date</TableCell>
+                      <TableCell align="right">Action</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {importHistory.map((h: any) => (
+                      <TableRow key={h.id} hover>
+                        <TableCell>
+                          <Typography fontWeight={500} fontSize="0.8125rem">{h.fileName}</Typography>
+                        </TableCell>
+                        <TableCell>
+                          <Chip label={h.level || h.importType} size="small" variant="outlined" sx={{ fontSize: '0.625rem' }} />
+                        </TableCell>
+                        <TableCell>{h.departmentName || '-'}</TableCell>
+                        <TableCell align="right" sx={{ fontFamily: 'monospace' }}>{h.rowCount}</TableCell>
+                        <TableCell align="right" sx={{ fontFamily: 'monospace', color: 'success.main' }}>{h.importedCount}</TableCell>
+                        <TableCell sx={{ fontSize: '0.75rem' }}>{formatDateDDMMYYYY(h.createdAt)}</TableCell>
+                        <TableCell align="right">
+                          <Tooltip title="Delete this import and all related stock data">
+                            <IconButton
+                              size="small"
+                              color="error"
+                              onClick={() => { setDeleteTarget(h); setDeleteDialog(true); }}
+                            >
+                              <Delete fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            )}
+          </Paper>
+
+          {/* Delete Confirmation Dialog */}
+          <Dialog open={deleteDialog} onClose={() => setDeleteDialog(false)} maxWidth="sm" fullWidth>
+            <DialogTitle>
+              <Stack direction="row" alignItems="center" spacing={1}>
+                <Warning color="error" />
+                <Typography variant="h6">Delete Import Data</Typography>
+              </Stack>
+            </DialogTitle>
+            <DialogContent>
+              {deleteTarget && (
+                <Stack spacing={2}>
+                  <Alert severity="error">
+                    Ye action undo nahi ho sakta! Is import se jude saare stock transactions delete ho jayenge.
+                  </Alert>
+                  <Paper sx={{ p: 2, bgcolor: 'grey.50' }}>
+                    <Typography variant="body2"><strong>File:</strong> {deleteTarget.fileName}</Typography>
+                    <Typography variant="body2"><strong>Level:</strong> {deleteTarget.level || deleteTarget.importType}</Typography>
+                    <Typography variant="body2"><strong>Department:</strong> {deleteTarget.departmentName || 'N/A'}</Typography>
+                    <Typography variant="body2"><strong>Rows:</strong> {deleteTarget.importedCount} imported</Typography>
+                    <Typography variant="body2"><strong>Date:</strong> {formatDateDDMMYYYY(deleteTarget.createdAt)}</Typography>
+                  </Paper>
+                  <Typography variant="body2" color="text.secondary">
+                    Kya aap sach mein ye import data delete karna chahte ho?
+                  </Typography>
+                </Stack>
+              )}
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={() => { setDeleteDialog(false); setDeleteTarget(null); }}>Cancel</Button>
+              <Button
+                variant="contained"
+                color="error"
+                onClick={handleDeleteImport}
+                disabled={deleting}
+                startIcon={deleting ? <CircularProgress size={16} /> : <Delete />}
+              >
+                {deleting ? 'Deleting...' : 'Ha, Delete Karo'}
+              </Button>
+            </DialogActions>
+          </Dialog>
+        </Box>
+      )}
+
+      {/* Import Dialog */}
+      <Dialog open={importDialog} onClose={() => setImportDialog(false)} maxWidth="md" fullWidth>
+        <DialogTitle>Import Data to Database</DialogTitle>
+        <DialogContent>
+          <Stack spacing={2.5} sx={{ mt: 1 }}>
+            <Alert severity="info">
+              Found {importRows.length} rows with columns: {importHeaders.join(', ')}
+            </Alert>
+            <FormControl fullWidth>
+              <InputLabel>Select Target Table</InputLabel>
+              <Select
+                value={importModel}
+                label="Select Target Table"
+                onChange={(e) => setImportModel(e.target.value)}
+              >
+                {tables?.map((t: any) => (
+                  <MenuItem key={t.model} value={t.model}>{t.name} (match by: {t.matchField})</MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+            {importModel && (
+              <Alert severity="warning">
+                Records will be matched by <strong>{tables?.find((t: any) => t.model === importModel)?.matchField}</strong>.
+                Existing records will be updated, new ones will be created.
+              </Alert>
+            )}
+            {importRows.length > 0 && (
+              <TableContainer sx={{ maxHeight: 300 }}>
+                <Table size="small" stickyHeader>
+                  <TableHead>
+                    <TableRow>
+                      {importHeaders.map((h) => (
+                        <TableCell key={h} sx={{ fontWeight: 700, fontSize: '0.75rem' }}>{h}</TableCell>
+                      ))}
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {importRows.slice(0, 20).map((row: any, idx: number) => (
+                      <TableRow key={idx}>
+                        {importHeaders.map((h) => (
+                          <TableCell key={h} sx={{ fontSize: '0.75rem' }}>{String(row[h] ?? '')}</TableCell>
+                        ))}
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            )}
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setImportDialog(false)}>Cancel</Button>
+          <Button
+            variant="contained"
+            onClick={handleImportToTable}
+            disabled={!importModel || importing}
+            startIcon={importing ? <CircularProgress size={16} /> : <TableChart />}
+          >
+            {importing ? 'Importing...' : `Import ${importRows.length} Rows`}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Backup Info Dialog */}
+      <Dialog open={backupInfoDialog} onClose={() => setBackupInfoDialog(false)} maxWidth="md" fullWidth>
+        <DialogTitle>
+          <Stack direction="row" alignItems="center" spacing={1}>
+            <Info />
+            <Typography variant="h6">Backup Data Summary</Typography>
+          </Stack>
+        </DialogTitle>
+        <DialogContent>
+          {backupInfoLoading ? (
+            <CircularProgress />
+          ) : (
+            <TableContainer>
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell><strong>Table Name</strong></TableCell>
+                    <TableCell align="right"><strong>Record Count</strong></TableCell>
+                    <TableCell><strong>Status</strong></TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {backupInfo?.map((table: any) => (
+                    <TableRow key={table.model} hover>
+                      <TableCell>{table.name}</TableCell>
+                      <TableCell align="right">
+                        <Typography variant="body2" sx={{ fontFamily: 'monospace', fontWeight: 500 }}>
+                          {table.count.toLocaleString()}
+                        </Typography>
+                      </TableCell>
+                      <TableCell>
+                        <Chip
+                          label={table.count > 0 ? 'Has Data' : 'Empty'}
+                          size="small"
+                          color={table.count > 0 ? 'success' : 'default'}
+                          variant="outlined"
+                        />
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          )}
+          <Alert severity="info" sx={{ mt: 2 }}>
+            All tables are included in the backup. The "Complete Excel Backup" exports every table with all columns and data.
+          </Alert>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setBackupInfoDialog(false)}>Close</Button>
+        </DialogActions>
+      </Dialog>
+    </Box>
+  );
+}
