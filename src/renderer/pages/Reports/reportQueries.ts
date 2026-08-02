@@ -742,7 +742,10 @@ export async function fetchReportData(params: ReportQueryParams): Promise<any[]>
             itemMap[iid].rooms[roomName] = (itemMap[iid].rooms[roomName] || 0) + qtyIn;
           }
         }
-        // Both: TRANSFER_OUT with room = item sent from room to pool/another dharamshala
+        // Both: TRANSFER_IN with room = room allocation, TRANSFER_OUT with room = room removal
+        if (txn.transactionType === 'TRANSFER_IN' && qtyIn > 0 && roomName) {
+          itemMap[iid].rooms[roomName] = (itemMap[iid].rooms[roomName] || 0) + qtyIn;
+        }
         if (txn.transactionType === 'TRANSFER_OUT' && qtyOut > 0 && roomName) {
           itemMap[iid].rooms[roomName] = (itemMap[iid].rooms[roomName] || 0) - qtyOut;
         }
