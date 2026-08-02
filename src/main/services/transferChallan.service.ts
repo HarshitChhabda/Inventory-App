@@ -321,6 +321,34 @@ export class TransferChallanService {
         });
       }
 
+      // Revert AssetInstallation status back to Active for source/destination room items
+      for (const item of tc.items) {
+        const srcLocId = (item as any).locationId || null;
+        if (srcLocId) {
+          await tx.assetInstallation.updateMany({
+            where: {
+              itemId: item.itemId,
+              locationId: srcLocId,
+              status: 'Inactive',
+              remarks: { contains: tc.challanNo },
+            },
+            data: { status: 'Active', remarks: `Reactivated — ${tc.challanNo} cancelled` },
+          });
+        }
+        const toLocId = (item as any).toLocationId || (item as any).locationId || null;
+        if (toLocId && toLocId !== srcLocId) {
+          await tx.assetInstallation.updateMany({
+            where: {
+              itemId: item.itemId,
+              locationId: toLocId,
+              status: 'Inactive',
+              remarks: { contains: tc.challanNo },
+            },
+            data: { status: 'Active', remarks: `Reactivated — ${tc.challanNo} cancelled` },
+          });
+        }
+      }
+
       await tx.auditLog.create({
         data: {
           companyId: tc.companyId, action: 'CANCEL', tableName: 'TransferChallan', recordId: id, recordUuid: tc.uuid,
