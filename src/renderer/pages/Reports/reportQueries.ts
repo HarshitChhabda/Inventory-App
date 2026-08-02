@@ -148,11 +148,11 @@ export async function fetchReportData(params: ReportQueryParams): Promise<any[]>
         orderBy: { transactionDate: 'asc' } 
       });
 
-      // Aggregate by item
+      // Aggregate by item + department (not just item, to avoid double-counting across depts)
       const summary: Record<string, any> = {};
       
       data.forEach((t: any) => {
-        const key = t.itemId;
+        const key = `${t.itemId}-${t.departmentId}`;
         if (!summary[key]) {
           summary[key] = { 
             item: t.item, 
