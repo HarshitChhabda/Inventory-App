@@ -717,6 +717,7 @@ export async function fetchReportData(params: ReportQueryParams): Promise<any[]>
             totalReceived: 0,
             allocatedToRooms: 0,
             rooms: {} as Record<string, number>,
+            transferredRooms: {} as Record<string, number>,
             poolBalance: 0,
           };
         }
@@ -741,13 +742,27 @@ export async function fetchReportData(params: ReportQueryParams): Promise<any[]>
           if ((txn.transactionType === 'ISSUE' || txn.transactionType === 'OPENING_STOCK') && qtyIn > 0 && isRoom && roomName) {
             itemMap[iid].rooms[roomName] = (itemMap[iid].rooms[roomName] || 0) + qtyIn;
           }
+          // TRANSFER_IN without room = item received from another dharamshala into pool
+          if (txn.transactionType === 'TRANSFER_IN' && qtyIn > 0 && !isRoom) {
+            itemMap[iid].totalReceived += qtyIn;
+          }
+          // TRANSFER_IN with room = item received and placed directly in room (not through pool)
+          if (txn.transactionType === 'TRANSFER_IN' && qtyIn > 0 && isRoom && roomName) {
+            itemMap[iid].transferredRooms[roomName] = (itemMap[iid].transferredRooms[roomName] || 0) + qtyIn;
+          }
+          // TRANSFER_OUT without room = item sent from pool to another dharamshala
+          if (txn.transactionType === 'TRANSFER_OUT' && qtyOut > 0 && !isRoom) {
+            itemMap[iid].totalReceived -= qtyOut;
+          }
         }
-        // Both: TRANSFER_IN with room = room allocation, TRANSFER_OUT with room = room removal
-        if (txn.transactionType === 'TRANSFER_IN' && qtyIn > 0 && roomName) {
-          itemMap[iid].rooms[roomName] = (itemMap[iid].rooms[roomName] || 0) + qtyIn;
-        }
-        if (txn.transactionType === 'TRANSFER_OUT' && qtyOut > 0 && roomName) {
-          itemMap[iid].rooms[roomName] = (itemMap[iid].rooms[roomName] || 0) - qtyOut;
+        // Both: TRANSFER_OUT with room = room removal
+        if (txn.transactionType === 'TRANSFER_OUT' && qtyOut > 0 && isRoom && roomName) {
+          // Remove from transferredRooms first (if it was placed there by TRANSFER_IN)
+          if ((itemMap[iid].transferredRooms[roomName] || 0) > 0) {
+            itemMap[iid].transferredRooms[roomName] -= qtyOut;
+          } else {
+            itemMap[iid].rooms[roomName] = (itemMap[iid].rooms[roomName] || 0) - qtyOut;
+          }
         }
       }
 
@@ -760,10 +775,18 @@ export async function fetchReportData(params: ReportQueryParams): Promise<any[]>
         item.poolBalance = item.totalReceived - item.allocatedToRooms;
       }
 
-      const items = Object.values(itemMap).map((item: any) => ({
-        ...item,
-        roomBreakdown: Object.entries(item.rooms).filter(([_, v]: any) => v > 0).map(([name, qty]) => `${name} (${qty})`).join(', ') || '-',
-      }));
+      const items = Object.values(itemMap).map((item: any) => {
+        // Merge rooms and transferredRooms for display
+        const allRooms = { ...item.rooms };
+        for (const [name, qty] of Object.entries(item.transferredRooms || {})) {
+          allRooms[name] = (allRooms[name] || 0) + Number(qty);
+        }
+        return {
+          ...item,
+          rooms: allRooms,
+          roomBreakdown: Object.entries(allRooms).filter(([_, v]: any) => v > 0).map(([name, qty]) => `${name} (${qty})`).join(', ') || '-',
+        };
+      });
 
       if (q) return items.filter((r: any) => r.itemName?.toLowerCase().includes(q) || r.itemCode?.toLowerCase().includes(q));
       return items;
