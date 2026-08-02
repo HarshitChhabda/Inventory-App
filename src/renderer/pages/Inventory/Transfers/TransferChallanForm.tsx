@@ -340,7 +340,9 @@ export default function TransferChallanForm() {
                           {d.name} (Store)
                         </MenuItem>
                       ))
-                    : departments?.map((d: any) => (
+                    : departments?.filter((d: any) =>
+                        d.id === formData.fromDepartmentId || d.departmentType === 'Store'
+                      ).map((d: any) => (
                         <MenuItem key={d.id} value={d.id}>
                           {d.name} {d.departmentType === 'Dharamshala' ? '(Dharamshala)' : '(Store)'}
                         </MenuItem>
