@@ -208,18 +208,19 @@ export async function fetchReportData(params: ReportQueryParams): Promise<any[]>
       if (selectedDepartment) where.departmentId = Number(selectedDepartment);
       if (selectedLocation) where.locationId = Number(selectedLocation);
       const data = await api.dbQuery('stockTransaction', 'findMany', { where, select: {
-        itemId: true, quantityIn: true, quantityOut: true, transactionDate: true,
+        itemId: true, departmentId: true, quantityIn: true, quantityOut: true, transactionDate: true,
         item: { include: { category: true, unit: true } },
+        department: true,
       }, orderBy: { transactionDate: 'desc' } });
       const summary: Record<string, any> = {};
       data.forEach((t: any) => {
-        const key = t.itemId;
-        if (!summary[key]) summary[key] = { item: t.item, totalIn: 0, totalOut: 0, lastDate: t.transactionDate };
+        const key = `${t.itemId}-${t.departmentId}`;
+        if (!summary[key]) summary[key] = { item: t.item, department: t.department, totalIn: 0, totalOut: 0, lastDate: t.transactionDate };
         summary[key].totalIn += Number(t.quantityIn || 0);
         summary[key].totalOut += Number(t.quantityOut || 0);
       });
       let result = Object.values(summary).map((s: any) => ({
-        ...s.item, totalReceived: s.totalIn, totalIssued: s.totalOut, currentStock: s.totalIn - s.totalOut, lastMovement: s.lastDate,
+        ...s.item, departmentName: s.department?.name || '', totalReceived: s.totalIn, totalIssued: s.totalOut, currentStock: s.totalIn - s.totalOut, lastMovement: s.lastDate,
       }));
       if (lowStockOnly) result = result.filter((r: any) => r.currentStock < Number(r.minimumStockLevel || 0));
       if (q) result = result.filter((r: any) => r.itemName?.toLowerCase().includes(q) || r.itemCode?.toLowerCase().includes(q));
