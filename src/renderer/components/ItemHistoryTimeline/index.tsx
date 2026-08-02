@@ -101,40 +101,57 @@ export default function ItemHistoryTimeline() {
         orderBy: [{ transactionDate: 'asc' }, { id: 'asc' }],
       });
 
-      // Process chronologically to track Main Store balance
-      let mainStoreBalance = 0;
-      const rows: any[] = [];
+      // Step 1: Compute overall running balance and track location receipts
+      let runningBalance = 0;
+      const locationRows: any[] = [];
+      const locationNetQty: Record<number, number> = {};
 
       for (const t of allTx) {
         const qtyIn = Number(t.quantityIn || 0);
         const qtyOut = Number(t.quantityOut || 0);
+        runningBalance += qtyIn - qtyOut;
 
-        if (!t.locationId) {
-          // Main Store transaction - just update balance
-          mainStoreBalance += qtyIn - qtyOut;
-        } else {
-          // Location transaction - record snapshot
+        if (t.locationId) {
+          // Track net quantity at each location (in - out)
+          if (!locationNetQty[t.locationId]) locationNetQty[t.locationId] = 0;
+          locationNetQty[t.locationId] += qtyIn - qtyOut;
+
           const issuedQty = t.transactionType === 'ISSUE' ? qtyOut : qtyIn;
-          const mainStoreBefore = mainStoreBalance;
-          mainStoreBalance -= issuedQty;
-
-          rows.push({
+          locationRows.push({
             id: t.id,
             locationId: t.locationId,
             locationName: t.location?.locationName || '',
             locationType: t.location?.locationType || '',
             departmentName: t.department?.name || '',
             issuedQty,
-            mainStoreBefore,
-            mainStoreBalance,
             date: t.transactionDate,
             transactionType: t.transactionType,
+            netQty: locationNetQty[t.locationId],
           });
         }
       }
 
-      // Sort by date ascending (chronological order)
-      rows.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+      // Step 2: Compute mainStoreBalance for each location row
+      // mainStoreBalance = runningBalance - sum of all location net quantities at that point
+      let cumulativeLocationNet = 0;
+      const rows: any[] = [];
+      const seenLocations = new Set<number>();
+
+      for (const row of locationRows) {
+        const prevCumulative = cumulativeLocationNet;
+        cumulativeLocationNet += row.netQty;
+
+        // mainStoreBefore: what main store had before this location received
+        const mainStoreBefore = runningBalance - prevCumulative;
+        // mainStoreBalance: what main store has after this location received
+        const mainStoreBalance = runningBalance - cumulativeLocationNet;
+
+        rows.push({
+          ...row,
+          mainStoreBefore,
+          mainStoreBalance,
+        });
+      }
 
       return rows;
     },
@@ -143,7 +160,9 @@ export default function ItemHistoryTimeline() {
   });
 
   const selectedItem = items?.find((i: any) => i.itemId === selectedItemId || i.id === selectedItemId);
-  const mainStoreFinal = locationBalances && locationBalances.length > 0 ? locationBalances[locationBalances.length - 1].mainStoreBalance : 0;
+  const mainStoreFinal = locationBalances && locationBalances.length > 0
+    ? locationBalances[locationBalances.length - 1].mainStoreBalance
+    : (history?.reduce((sum: number, t: any) => sum + (t.quantityIn || 0) - (t.quantityOut || 0), 0) ?? 0);
 
   return (
     <Box>

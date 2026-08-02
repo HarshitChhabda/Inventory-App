@@ -11,7 +11,7 @@
 
 **Shri Mahaveerji (Digamber Jain Atishay Kshetra)** के लिए बना यह एक Desktop Inventory Management Application है। यह stores, departments, और rooms (धर्मशाला कमरे) के बीच materials के पूरे flow — आना (Receipt), जाना (Issue), और Transfer — को track करता है।
 
-> **Version:** 1.6.0 | **Platform:** Windows (NSIS Installer) | **Database:** SQLite + Prisma ORM
+> **Version:** 1.6.1 | **Platform:** Windows (NSIS Installer) | **Database:** SQLite + Prisma ORM
 
 ---
 
@@ -997,7 +997,12 @@ npm run build:win
 
 ---
 
-## 12. Recent Changes (v1.6.0)
+## 12. Recent Changes (v1.6.1)
+
+### Bug Fix
+- **Item History Balance by Location** — Fixed off-by-one balance calculation. Previously treated all `locationId=NULL` transactions as Main Store, even when they were department-level receipts. Now computes main store balance as `overallRunningBalance - sum(locationNetQuantities)`.
+
+## 13. Recent Changes (v1.6.0)
 
 ### Item Name Import
 - **Excel import** — All item names restored from `imartstore.xlsx` using `Item Code` as reference
