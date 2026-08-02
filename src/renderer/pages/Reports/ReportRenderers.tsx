@@ -2,12 +2,13 @@ import React from 'react';
 import {
   Box, Typography, Paper, Stack, Button, Table, TableBody, TableCell,
   TableContainer, TableHead, TableRow, Chip, Card, CardContent, alpha,
-  useTheme, Divider,
+  useTheme, Divider, Grid,
 } from '@mui/material';
 import {
   Download as DownloadIcon, Print as PrintIcon, Assessment,
   TrendingUp, TrendingDown, Warning, Inventory, CheckCircle, Error,
 } from '@mui/icons-material';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, PieChart, Pie, Cell, LineChart, Line, ResponsiveContainer } from 'recharts';
 import { exportToExcel, ExportColumn, downloadBuffer } from '../../utils/importExport';
 import { formatDateDDMMYYYY } from '../../utils/dateUtils';
 import toast from 'react-hot-toast';
@@ -500,6 +501,133 @@ export function DamageScrapReturnsReport({ data, fyLabel }: { data: any[]; fyLab
           </>
         )}
       />
+      <PrintFooter />
+    </Box>
+  );
+}
+
+// ==================== ITEM LIFECYCLE ====================
+
+export function ItemLifecycleRenderer({ data }: { data: any[] }) {
+  if (!data || data.length === 0) return <Typography>No data</Typography>;
+
+  return (
+    <Box>
+      <ReportHeader title="Item Movement Lifecycle" titleHindi="सामान आवागमन जीवन चक्र" />
+      <TableContainer component={Paper} sx={{ mb: 2 }}>
+        <Table size="small">
+          <TableHead>
+            <TableRow sx={{ bgcolor: '#1A365D' }}>
+              {['#', 'Date', 'Type', 'Item', 'Department', 'Location', 'In', 'Out', 'Balance', 'Ref', 'Condition'].map(h => (
+                <TableCell key={h} sx={{ color: '#fff', fontWeight: 600, fontSize: '0.7rem' }}>{h}</TableCell>
+              ))}
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {data.map((r, i) => (
+              <TableRow key={i} hover>
+                <TableCell align="center">{i + 1}</TableCell>
+                <TableCell sx={{ fontSize: '0.75rem' }}>{formatDateDDMMYYYY(new Date(r.date))}</TableCell>
+                <TableCell>
+                  <Chip label={r.transactionType} size="small" sx={{
+                    fontWeight: 600, fontSize: '0.6rem',
+                    bgcolor: r.transactionType.includes('IN') || r.transactionType === 'PURCHASE' || r.transactionType === 'OPENING_STOCK'
+                      ? alpha('#16A34A', 0.1) : r.transactionType.includes('OUT') || r.transactionType === 'ISSUE'
+                      ? alpha('#DC2626', 0.1) : alpha('#D97706', 0.1),
+                    color: r.transactionType.includes('IN') || r.transactionType === 'PURCHASE' || r.transactionType === 'OPENING_STOCK'
+                      ? '#16A34A' : r.transactionType.includes('OUT') || r.transactionType === 'ISSUE'
+                      ? '#DC2626' : '#D97706',
+                  }} />
+                </TableCell>
+                <TableCell sx={{ fontSize: '0.75rem' }}>{r.itemName}</TableCell>
+                <TableCell sx={{ fontSize: '0.75rem' }}>{r.departmentName}</TableCell>
+                <TableCell sx={{ fontSize: '0.75rem' }}>{r.locationName}</TableCell>
+                <TableCell align="right" sx={{ color: '#16A34A', fontWeight: 600 }}>{r.quantityIn || '-'}</TableCell>
+                <TableCell align="right" sx={{ color: '#DC2626', fontWeight: 600 }}>{r.quantityOut || '-'}</TableCell>
+                <TableCell align="right" sx={{ fontWeight: 600 }}>{r.balanceQty}</TableCell>
+                <TableCell sx={{ fontFamily: 'monospace', fontSize: '0.65rem' }}>{r.referenceNo}</TableCell>
+                <TableCell>
+                  <Chip label={r.condition} size="small" sx={{ fontSize: '0.6rem' }}
+                    color={r.condition === 'GOOD' ? 'success' : r.condition === 'DAMAGED' ? 'error' : 'default'} />
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </TableContainer>
+      <PrintFooter />
+    </Box>
+  );
+}
+
+// ==================== VISUAL ANALYTICS ====================
+
+export function VisualAnalyticsRenderer({ data }: { data: any[] }) {
+  if (!data || data.length === 0) return <Typography>No data available</Typography>;
+
+  const analytics = data[0] as any;
+  const COLORS = ['#1A365D', '#16A34A', '#D97706', '#DC2626', '#7C3AED', '#2563EB', '#EA580C', '#0891B2'];
+
+  return (
+    <Box>
+      <ReportHeader title="Visual Analytics Dashboard" titleHindi="दृश्य विश्लेषण डैशबोर्ड" />
+      <Grid container spacing={3}>
+        {analytics.departmentConsumption?.length > 0 && (
+          <Grid item xs={12} md={6}>
+            <Paper sx={{ p: 2, borderRadius: 2 }}>
+              <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 1 }}>Department Consumption</Typography>
+              <ResponsiveContainer width="100%" height={300}>
+                <BarChart data={analytics.departmentConsumption.slice(0, 10)}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="name" tick={{ fontSize: 10 }} angle={-30} textAnchor="end" height={80} />
+                  <YAxis />
+                  <Tooltip />
+                  <Legend />
+                  <Bar dataKey="received" fill="#16A34A" name="Received" />
+                  <Bar dataKey="issued" fill="#DC2626" name="Issued" />
+                </BarChart>
+              </ResponsiveContainer>
+            </Paper>
+          </Grid>
+        )}
+
+        {analytics.locationDistribution?.length > 0 && (
+          <Grid item xs={12} md={6}>
+            <Paper sx={{ p: 2, borderRadius: 2 }}>
+              <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 1 }}>Stock Distribution by Location</Typography>
+              <ResponsiveContainer width="100%" height={300}>
+                <PieChart>
+                  <Pie data={analytics.locationDistribution} dataKey="qty" nameKey="name" cx="50%" cy="50%" outerRadius={100} label={({ name, percent }) => `${name} (${(percent * 100).toFixed(0)}%)`}>
+                    {analytics.locationDistribution.map((_: any, i: number) => (
+                      <Cell key={i} fill={COLORS[i % COLORS.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip />
+                </PieChart>
+              </ResponsiveContainer>
+            </Paper>
+          </Grid>
+        )}
+
+        {analytics.monthlyTrend?.length > 0 && (
+          <Grid item xs={12}>
+            <Paper sx={{ p: 2, borderRadius: 2 }}>
+              <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 1 }}>Monthly Receipt vs Issue Trend</Typography>
+              <ResponsiveContainer width="100%" height={300}>
+                <LineChart data={analytics.monthlyTrend}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="month" />
+                  <YAxis />
+                  <Tooltip />
+                  <Legend />
+                  <Line type="monotone" dataKey="received" stroke="#16A34A" strokeWidth={2} name="Received" />
+                  <Line type="monotone" dataKey="issued" stroke="#DC2626" strokeWidth={2} name="Issued" />
+                </LineChart>
+              </ResponsiveContainer>
+            </Paper>
+          </Grid>
+        )}
+      </Grid>
       <PrintFooter />
     </Box>
   );

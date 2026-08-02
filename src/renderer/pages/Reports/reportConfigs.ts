@@ -37,6 +37,7 @@ export const REPORT_SECTIONS = [
       { key: 'dharamshala_distribution', name: 'Dharamshala Distribution', description: 'Dharamshala-level stock & room allocation' },
       { key: 'room_facilities', name: 'Room Facilities Checklist', description: 'Installed assets per room' },
       { key: 'item_audit_ledger', name: 'Item Audit Ledger', description: 'Complete item movement history' },
+      { key: 'item_lifecycle', name: 'Item Lifecycle', description: 'Chronological movement history of an item' },
     ],
   },
   {
@@ -44,6 +45,7 @@ export const REPORT_SECTIONS = [
     iconKey: 'Analytics',
     color: '#7C3AED',
     reports: [
+      { key: 'visual_analytics', name: 'Visual Analytics', description: 'Interactive charts and graphs' },
       { key: 'low_stock', name: 'Low Stock Items', description: 'Items below minimum level' },
       { key: 'dead_stock', name: 'Dead Stock', description: 'Items with no movement' },
       { key: 'damage_report', name: 'Damage Report', description: 'Damaged items report' },
@@ -104,6 +106,7 @@ export const COLUMN_LABELS: Record<string, string> = {
   totalAmount: 'Total', purpose: 'Purpose', remarks: 'Remarks', adjustmentType: 'Type',
   reason: 'Reason', installedDate: 'Installed', installedBy: 'Installed By',
   totalQty: 'Total Received', rooms: 'Room No (Qty)',
+  returned: 'Returned', parentLocation: 'Parent Location',
   status: 'Status', totalReceived: 'Received', totalIssued: 'Issued',
   currentStock: 'Current Stock', lastMovement: 'Last Movement', name: 'Name',
   username: 'Username', action: 'Action', tableName: 'Table', description: 'Description',
@@ -121,7 +124,7 @@ export const REPORT_FILTER_MAP: Record<string, string[]> = {
   stock_ledger: ['date', 'item', 'department', 'txType', 'search'],
   current_stock_custom: ['department', 'category', 'search'],
   stock_distribution: ['item', 'category', 'department', 'location', 'search'],
-  stock_summary: ['search'],
+  stock_summary: ['department', 'category', 'search'],
   low_stock: ['item', 'category', 'lowStock', 'search'],
   dead_stock: ['item', 'category', 'search'],
   damage_report: ['date', 'item', 'location', 'status', 'search'],
@@ -140,5 +143,7 @@ export const REPORT_FILTER_MAP: Record<string, string[]> = {
   dharamshala_distribution: ['department', 'search'],
   room_facilities: ['department', 'location', 'search'],
   item_audit_ledger: ['item', 'date', 'search'],
+  item_lifecycle: ['item', 'search'],
+  visual_analytics: ['search'],
   damage_scrap_returns: ['date', 'category', 'search'],
 };

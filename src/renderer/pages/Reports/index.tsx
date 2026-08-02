@@ -40,6 +40,8 @@ import {
   RoomFacilitiesReport,
   ItemAuditLedgerReport,
   DamageScrapReturnsReport,
+  ItemLifecycleRenderer,
+  VisualAnalyticsRenderer,
 } from './ReportRenderers';
 
 export default function ReportsPage() {
@@ -990,6 +992,17 @@ export default function ReportsPage() {
           fyLabel={financialYear?.label || ''}
         />
       );
+    }
+
+    if (activeReport === 'item_lifecycle') {
+      if (!selectedItemId) {
+        return <EmptyState icon={<Assessment />} title="Select an Item" description="Please select an item from the filters above to view its complete lifecycle." />;
+      }
+      return <ItemLifecycleRenderer data={data} />;
+    }
+
+    if (activeReport === 'visual_analytics') {
+      return <VisualAnalyticsRenderer data={data} />;
     }
 
     return (

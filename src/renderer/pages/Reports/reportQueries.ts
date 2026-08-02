@@ -989,33 +989,50 @@ export async function fetchReportData(params: ReportQueryParams): Promise<any[]>
     }
 
     case 'stock_summary': {
-      // Aggregate stock by item — total received, total issued, current balance
+      // Aggregate stock by item + department from StockTransaction (single source of truth)
+      const whereClause: any = { companyId, financialYearId };
+      if (sd || ed) {
+        whereClause.transactionDate = {};
+        if (sd) whereClause.transactionDate.gte = sd;
+        if (ed) whereClause.transactionDate.lte = ed;
+      }
+      if (selectedItemId) whereClause.itemId = selectedItemId;
+      if (selectedCategoryId) whereClause.item = { categoryId: Number(selectedCategoryId) };
+      if (selectedDepartment) whereClause.departmentId = Number(selectedDepartment);
+
       const allTx = await api.dbQuery('stockTransaction', 'findMany', {
-        where: { companyId, financialYearId, ...(sd || ed ? { transactionDate: { ...(sd ? { gte: sd } : {}), ...(ed ? { lte: ed } : {}) } } : {}) },
-        include: { item: true, location: true, department: true },
+        where: whereClause,
+        include: { item: { include: { category: true, unit: true } }, department: true, location: true },
         orderBy: { transactionDate: 'asc' },
         take: 10000,
       });
 
-      const itemMap = new Map<number, any>();
+      const itemMap = new Map<string, any>();
       for (const tx of allTx as any[]) {
-        const key = tx.itemId;
+        const key = `${tx.itemId}-${tx.departmentId}`;
         if (!itemMap.has(key)) {
           itemMap.set(key, {
+            _itemId: tx.itemId,
             itemCode: tx.item?.itemCode || '',
             itemName: tx.item?.itemName || '',
             category: tx.item?.category?.name || '',
             unit: tx.item?.unit?.name || '',
+            departmentName: tx.department?.name || '',
+            departmentType: tx.department?.departmentType || '',
             totalReceived: 0,
             totalIssued: 0,
+            returned: 0,
             currentStock: 0,
             lastDate: tx.transactionDate,
             lastRate: tx.rate,
           });
         }
         const agg = itemMap.get(key);
-        agg.totalReceived += Number(tx.quantityIn || 0);
-        agg.totalIssued += Number(tx.quantityOut || 0);
+        const qtyIn = Number(tx.quantityIn || 0);
+        const qtyOut = Number(tx.quantityOut || 0);
+        agg.totalReceived += qtyIn;
+        agg.totalIssued += qtyOut;
+        if (tx.transactionType === 'REVERSAL') agg.returned += qtyIn;
         agg.currentStock = agg.totalReceived - agg.totalIssued;
         if (tx.transactionDate > agg.lastDate) {
           agg.lastDate = tx.transactionDate;
@@ -1026,6 +1043,84 @@ export async function fetchReportData(params: ReportQueryParams): Promise<any[]>
       let rows = Array.from(itemMap.values());
       if (q) rows = rows.filter((r: any) => r.itemName?.toLowerCase().includes(q) || r.itemCode?.toLowerCase().includes(q));
       return rows;
+    }
+
+    case 'item_lifecycle': {
+      if (!selectedItemId) return [];
+      const txs = await api.dbQuery('stockTransaction', 'findMany', {
+        where: { companyId, financialYearId, itemId: Number(selectedItemId) },
+        include: { item: { include: { category: true, unit: true } }, department: true, location: true },
+        orderBy: { transactionDate: 'asc' },
+      });
+      let sNo = 1;
+      return (txs as any[]).map((tx: any) => ({
+        sNo: sNo++,
+        date: tx.transactionDate,
+        transactionType: tx.transactionType,
+        itemCode: tx.item?.itemCode || '',
+        itemName: tx.item?.itemName || '',
+        departmentName: tx.department?.name || '',
+        departmentType: tx.department?.departmentType || '',
+        locationName: tx.location?.locationName || 'Dept Level',
+        parentLocation: tx.location?.parentId ? '' : '',
+        quantityIn: Number(tx.quantityIn || 0),
+        quantityOut: Number(tx.quantityOut || 0),
+        rate: Number(tx.rate || 0),
+        balanceQty: Number(tx.balanceQty || 0),
+        condition: tx.condition || '',
+        referenceNo: tx.referenceNo || '',
+        referenceType: tx.referenceType || '',
+        remarks: tx.remarks || '',
+      }));
+    }
+
+    case 'visual_analytics': {
+      // Aggregated data for charts
+      const txData = await api.dbQuery('stockTransaction', 'findMany', {
+        where: { companyId, financialYearId },
+        include: { item: { include: { category: true } }, department: true },
+        orderBy: { transactionDate: 'asc' },
+        take: 10000,
+      });
+
+      // Department consumption
+      const deptConsumption: Record<string, { name: string; received: number; issued: number }> = {};
+      // Monthly trend
+      const monthlyTrend: Record<string, { month: string; received: number; issued: number }> = {};
+      // Location distribution
+      const locationDist: Record<string, { name: string; qty: number }> = {};
+
+      for (const tx of txData as any[]) {
+        const deptName = tx.department?.name || 'Unknown';
+        const qtyIn = Number(tx.quantityIn || 0);
+        const qtyOut = Number(tx.quantityOut || 0);
+
+        // Dept consumption
+        if (!deptConsumption[tx.departmentId]) deptConsumption[tx.departmentId] = { name: deptName, received: 0, issued: 0 };
+        deptConsumption[tx.departmentId].received += qtyIn;
+        deptConsumption[tx.departmentId].issued += qtyOut;
+
+        // Monthly trend
+        const d = new Date(tx.transactionDate);
+        const monthKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+        const monthLabel = d.toLocaleDateString('en-IN', { month: 'short', year: '2-digit' });
+        if (!monthlyTrend[monthKey]) monthlyTrend[monthKey] = { month: monthLabel, received: 0, issued: 0 };
+        monthlyTrend[monthKey].received += qtyIn;
+        monthlyTrend[monthKey].issued += qtyOut;
+
+        // Location distribution (current stock per dept type)
+        if (tx.department?.departmentType && qtyIn > 0) {
+          const locName = tx.department.name;
+          if (!locationDist[locName]) locationDist[locName] = { name: locName, qty: 0 };
+          locationDist[locName].qty += qtyIn - qtyOut;
+        }
+      }
+
+      return [{
+        departmentConsumption: Object.values(deptConsumption).filter((d: any) => d.received > 0 || d.issued > 0),
+        monthlyTrend: Object.values(monthlyTrend),
+        locationDistribution: Object.values(locationDist).filter((l: any) => l.qty > 0),
+      }];
     }
 
     default:
