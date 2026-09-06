@@ -49,7 +49,9 @@ export function verifyPassword(password: string, storedHash: string): boolean {
     SCRYPT_KEYLEN,
     { cost: SCRYPT_COST, blockSize: SCRYPT_BLOCK_SIZE, parallelization: SCRYPT_PARALLELIZATION },
   );
-  return crypto.timingSafeEqual(Buffer.from(hashHex, 'hex'), derived);
+  const hashBuf = Buffer.from(hashHex, 'hex');
+  if (hashBuf.length !== derived.length) return false;
+  return crypto.timingSafeEqual(hashBuf, derived);
 }
 
 // ─── Permission Checking ────────────────────────────────────────────
@@ -112,6 +114,7 @@ export interface SafeUser {
   role: string;
   permissions: string[];
   isActive: boolean;
+  companyId?: number | null;
   createdAt: Date;
 }
 

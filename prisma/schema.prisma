@@ -8,540 +8,914 @@ datasource db {
 }
 
 model Company {
-  id                   Int                   @id @default(autoincrement())
-  uuid                 String                @unique @default(uuid())
-  name                 String                @unique
-  address              String?
-  phone                String?
-  logoPath             String?
-  isActive             Boolean               @default(true)
-  createdAt            DateTime              @default(now())
-  updatedAt            DateTime              @updatedAt
-  auditLogs            AuditLog[]
-  departments          Department[]
-  financialYears       FinancialYear[]
-  issueChallans        IssueChallan[]
-  receiptChallans      ReceiptChallan[]
-  stockAdjustments     StockAdjustment[]
-  stockTransactions    StockTransaction[]
-  transferChallans     TransferChallan[]
-  vendorReturnChallans VendorReturnChallan[]
-  importHistories      ImportHistory[]
-  challanSequences     ChallanSequence[]
-  damageEntries        DamageEntry[]
+  id                 Int                          @id @default(autoincrement())
+  uuid               String                       @unique @default(uuid())
+  name               String                       @unique
+  address            String?
+  phone              String?
+  email              String?
+  gstNumber          String?
+  logoPath           String?
+  isActive           Boolean                      @default(true)
+  createdAt          DateTime                     @default(now())
+  updatedAt          DateTime                     @updatedAt
+  amcAgreements      AMCAgreement[]
+  approvalWorkflows  ApprovalWorkflow[]
+  assets             AssetProfile[]
+  auditLogs          AuditLog[]
+  breakdownHistory   BreakdownHistory[]
+  departments        Department[]
+  dharmshalas        Dharmshala[]
+  employees          Employee[]
+  financialYears     FinancialYear[]
+  goodsReceipts      GoodsReceipt[]
+  importHistories    ImportHistory[]
+  ledgers            LedgerEntry[]
+  maintenanceHistory MaintenanceHistory[]
+  notifications      Notification[]
+  passwordPolicy     PasswordPolicy?
+  priceHistory       PriceHistory[]
+  purchaseHistory    PurchaseHistory[]
+  purchaseOrders     PurchaseOrder[]
+  quotations         Quotation[]
+  requisitions       RequisitionHeader[]
+  roles              Role[]
+  serviceRequests    ServiceRequest[]
+  serviceSchedules   ServiceSchedule[]
+  stores             Store[]
+  configurations     SystemConfiguration[]
+  transactions       TransactionHeader[]
+  vendors            Vendor[]
+  voucherSequences   VoucherSequence[]
+  warrantyClaims     WarrantyClaim[]
+  consumptions       MaterialConsumption[]
+  installations      MaterialInstallation[]
+  completions        WorkCompletionVerification[]
+  workOrders         WorkOrder[]
 }
 
 model FinancialYear {
-  id                   Int                   @id @default(autoincrement())
-  uuid                 String                @unique @default(uuid())
-  companyId            Int
-  label                String
-  startDate            DateTime
-  endDate              DateTime
-  isClosed             Boolean               @default(false)
-  closedAt             DateTime?
-  createdAt            DateTime              @default(now())
-  company              Company               @relation(fields: [companyId], references: [id])
-  issueChallans        IssueChallan[]
-  openingStocks        OpeningStock[]
-  receiptChallans      ReceiptChallan[]
-  stockAdjustments     StockAdjustment[]
-  stockTransactions    StockTransaction[]
-  transferChallans     TransferChallan[]
-  vendorReturnChallans VendorReturnChallan[]
-  importHistories      ImportHistory[]
-  challanSequences     ChallanSequence[]
+  id                Int                          @id @default(autoincrement())
+  uuid              String                       @unique @default(uuid())
+  companyId         Int
+  label             String
+  startDate         DateTime
+  endDate           DateTime
+  isClosed          Boolean                      @default(false)
+  closedAt          DateTime?
+  closedBy          Int?
+  openingStockJson  String?
+  closingStockJson  String?
+  openingLedgerJson String?
+  closingLedgerJson String?
+  totalReceipts     Float                        @default(0)
+  totalIssues       Float                        @default(0)
+  totalTransfers    Float                        @default(0)
+  totalAdjustments  Float                        @default(0)
+  totalDamage       Float                        @default(0)
+  totalConsumption  Float                        @default(0)
+  closingReportJson String?
+  createdAt         DateTime                     @default(now())
+  company           Company                      @relation(fields: [companyId], references: [id])
+  goodsReceipts     GoodsReceipt[]
+  importHistories   ImportHistory[]
+  ledgers           LedgerEntry[]
+  purchaseOrders    PurchaseOrder[]
+  requisitions      RequisitionHeader[]
+  serviceRequests   ServiceRequest[]
+  transactions      TransactionHeader[]
+  consumptions      MaterialConsumption[]
+  installations     MaterialInstallation[]
+  voucherSequences  VoucherSequence[]
+  completions       WorkCompletionVerification[]
+  workOrders        WorkOrder[]
 
   @@unique([companyId, label])
   @@index([companyId])
 }
 
 model Department {
-  id                Int                @id @default(autoincrement())
-  uuid              String             @unique @default(uuid())
-  companyId         Int
-  name              String
-  code              String?
-  departmentType    String             @default("Store")
-  isActive          Boolean            @default(true)
-  company           Company            @relation(fields: [companyId], references: [id])
-  issueSourceStores IssueChallan[]     @relation("IssueSourceStore")
-  issueChallans     IssueChallan[]
-  itemCategories    ItemCategory[]
-  receiptChallans   ReceiptChallan[]
-  stockAdjustments  StockAdjustment[]
-  stockTransactions StockTransaction[]
-  toTransfers       TransferChallan[]  @relation("ToDepartment")
-  fromTransfers     TransferChallan[]  @relation("FromDepartment")
+  id               Int                 @id @default(autoincrement())
+  uuid             String              @unique @default(uuid())
+  companyId        Int
+  name             String
+  code             String?
+  departmentType   String              @default("Department")
+  isActive         Boolean             @default(true)
+  assets           AssetProfile[]      @relation("AssetCurrentDept")
+  company          Company             @relation(fields: [companyId], references: [id])
+  employees        Employee[]
+  requisitions     RequisitionHeader[]
+  destRequisitions RequisitionHeader[] @relation("DestDepartment")
+  stores           Store[]
+  transactions     TransactionHeader[]
 
   @@unique([companyId, name])
   @@index([companyId])
 }
 
-model ItemCategory {
-  id           Int         @id @default(autoincrement())
-  uuid         String      @unique @default(uuid())
-  name         String      @unique
-  prefix       String      @unique @default("GEN")
-  isActive     Boolean     @default(true)
-  departmentId Int?
-  items        Item[]
-  department   Department? @relation(fields: [departmentId], references: [id])
+model Store {
+  id                 Int                 @id @default(autoincrement())
+  uuid               String              @unique @default(uuid())
+  companyId          Int
+  departmentId       Int?
+  name               String
+  code               String?
+  storeType          String              @default("MAIN_STORE")
+  parentStoreId      Int?
+  isActive           Boolean             @default(true)
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  assetInstallations AssetInstallation[]
+  assets             AssetProfile[]      @relation("AssetCurrentStore")
+  goodsReceipts      GoodsReceipt[]
+  categories         ItemCategory[]
+  ledgers            LedgerEntry[]
+  locations          Location[]
+  sourceRequisitions RequisitionHeader[] @relation("SourceStore")
+  destRequisitions   RequisitionHeader[] @relation("DestStore")
+  serializedItems    SerializedItem[]
+  company            Company             @relation(fields: [companyId], references: [id])
+  department         Department?         @relation(fields: [departmentId], references: [id])
+  parentStore        Store?              @relation("StoreHierarchy", fields: [parentStoreId], references: [id])
+  childStores        Store[]             @relation("StoreHierarchy")
+  transactionsFrom   TransactionHeader[] @relation("TxFromStore")
+  transactionsTo     TransactionHeader[] @relation("TxToStore")
+   consumptions       MaterialConsumption[]
+   installations      MaterialInstallation[]
 
+   @@unique([companyId, name])
+  @@index([companyId])
+  @@index([storeType])
+  @@index([parentStoreId])
   @@index([departmentId])
 }
 
-model Unit {
-  id                  Int                  @id @default(autoincrement())
-  uuid                String               @unique @default(uuid())
-  name                String               @unique
-  symbol              String?
-  issueChallanItems   IssueChallanItem[]
-  items               Item[]
-  receiptChallanItems ReceiptChallanItem[]
-}
+model Dharmshala {
+  id               Int                 @id @default(autoincrement())
+  uuid             String              @unique @default(uuid())
+  companyId        Int
+  name             String
+  code             String?
+  address          String?
+  contactPerson    String?
+  contactPhone     String?
+  isActive         Boolean             @default(true)
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+  company          Company             @relation(fields: [companyId], references: [id])
 
-model Item {
-  id                   Int                       @id @default(autoincrement())
-  uuid                 String                    @unique @default(uuid())
-  itemCode             String                    @unique
-  itemName             String
-  categoryId           Int
-  unitId               Int
-  minimumStockLevel    Decimal                   @default(0)
-  isActive             Boolean                   @default(true)
-  createdAt            DateTime                  @default(now())
-  updatedAt            DateTime                  @updatedAt
-  assetInstallations   AssetInstallation[]
-  damageEntries        DamageEntry[]
-  issueChallanItems    IssueChallanItem[]
-  unit                 Unit                      @relation(fields: [unitId], references: [id])
-  category             ItemCategory              @relation(fields: [categoryId], references: [id])
-  openingStocks        OpeningStock[]
-  receiptChallanItems  ReceiptChallanItem[]
-  stockAdjustments     StockAdjustment[]
-  stockTransactions    StockTransaction[]
-  transferChallanItems TransferChallanItem[]
-  vendorReturnItems    VendorReturnChallanItem[]
-
-  @@index([categoryId])
-  @@index([isActive])
-}
-
-model Vendor {
-  id                   Int                   @id @default(autoincrement())
-  uuid                 String                @unique @default(uuid())
-  name                 String
-  contactPerson        String?
-  phone                String?
-  address              String?
-  gstNumber            String?
-  isActive             Boolean               @default(true)
-  createdAt            DateTime              @default(now())
-  receiptChallans      ReceiptChallan[]
-  vendorReturnChallans VendorReturnChallan[]
+  @@unique([companyId, name])
+  @@index([companyId])
 }
 
 model Location {
-  id                      Int                   @id @default(autoincrement())
-  uuid                    String                @unique @default(uuid())
-  locationType            String
-  locationName            String
-  category                String?
-  floor                   String?
-  parentId                Int?
-  isActive                Boolean               @default(true)
-  assetInstallations      AssetInstallation[]
-  damageEntries           DamageEntry[]
-  issueChallanItems       IssueChallanItem[]
-  parent                  Location?             @relation("LocationHierarchy", fields: [parentId], references: [id])
-  children                Location[]            @relation("LocationHierarchy")
-  receiptChallanItems     ReceiptChallanItem[]
-  stockAdjustments        StockAdjustment[]
-  stockTransactions       StockTransaction[]
-  transferToLocationItems TransferChallanItem[] @relation("TransferToLocation")
-  transferChallanItems    TransferChallanItem[]
+  id               Int                 @id @default(autoincrement())
+  uuid             String              @unique @default(uuid())
+  storeId          Int
+  name             String
+  code             String?
+  locationType     String
+  parentId         Int?
+  isActive         Boolean             @default(true)
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+  assets           AssetProfile[]      @relation("AssetCurrentLocation")
+  ledgers          LedgerEntry[]
+  store            Store               @relation(fields: [storeId], references: [id])
+  parent           Location?           @relation("LocationHierarchy", fields: [parentId], references: [id])
+  children         Location[]          @relation("LocationHierarchy")
+  rooms                    Room[]
+  transactionsFrom         TransactionHeader[] @relation("TxFromLocation")
+  transactionsTo           TransactionHeader[] @relation("TxToLocation")
+  transactionDetailsFrom   TransactionDetail[] @relation("TxDetailFromLocation")
+  transactionDetailsTo     TransactionDetail[] @relation("TxDetailToLocation")
+  demandItems              MaterialDemandItem[]
+   consumptions       MaterialConsumption[]
+   installations      MaterialInstallation[]
 
+  @@index([storeId])
   @@index([locationType])
+  @@index([parentId])
 }
 
-model ReceiptChallan {
-  id              Int                   @id @default(autoincrement())
-  uuid            String                @unique @default(uuid())
-  challanNo       String
-  companyId       Int
-  financialYearId Int
-  date            DateTime
-  sourceType      String
-  vendorId        Int?
-  sourceName      String?
-  invoiceNumber   String?
-  invoiceDate     DateTime?
-  vehicleNumber   String?
-  receivedBy      String
-  departmentId    Int?
-  remarks         String?
-  status          String                @default("Draft")
-  postedAt        DateTime?
-  postedBy        String?
-  cancelledAt     DateTime?
-  cancelReason    String?
-  createdAt       DateTime              @default(now())
-  updatedAt       DateTime              @updatedAt
-  department      Department?           @relation(fields: [departmentId], references: [id])
-  vendor          Vendor?               @relation(fields: [vendorId], references: [id])
-  financialYear   FinancialYear         @relation(fields: [financialYearId], references: [id])
-  company         Company               @relation(fields: [companyId], references: [id])
-  items           ReceiptChallanItem[]
-  vendorReturns   VendorReturnChallan[]
+model Room {
+  id            Int                 @id @default(autoincrement())
+  uuid          String              @unique @default(uuid())
+  locationId    Int
+  name          String
+  code          String?
+  floor         String?
+  capacity      Int?
+  isActive      Boolean             @default(true)
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+  installations AssetInstallation[]
+  assets        AssetProfile[]      @relation("AssetCurrentRoom")
+  location      Location            @relation(fields: [locationId], references: [id])
 
-  @@unique([companyId, financialYearId, challanNo])
+  @@index([locationId])
+}
+
+model ItemCategory {
+  id            Int               @id @default(autoincrement())
+  uuid          String            @unique @default(uuid())
+  storeId       Int?
+  name          String
+  prefix        String            @default("GEN")
+  isActive      Boolean           @default(true)
+  items         Item[]
+  store         Store?            @relation(fields: [storeId], references: [id])
+  subCategories ItemSubCategory[]
+
+  @@unique([storeId, name])
+  @@index([storeId])
+  @@index([name])
+}
+
+model ItemSubCategory {
+  id         Int          @id @default(autoincrement())
+  uuid       String       @unique @default(uuid())
+  categoryId Int
+  name       String
+  isActive   Boolean      @default(true)
+  items      Item[]
+  category   ItemCategory @relation(fields: [categoryId], references: [id])
+
+  @@unique([categoryId, name])
+  @@index([categoryId])
+}
+
+model Unit {
+  id       Int     @id @default(autoincrement())
+  uuid     String  @unique @default(uuid())
+  name     String  @unique
+  symbol   String?
+  isActive Boolean @default(true)
+  items    Item[]
+
+  @@index([name])
+}
+
+model Brand {
+  id       Int            @id @default(autoincrement())
+  uuid     String         @unique @default(uuid())
+  name     String         @unique
+  isActive Boolean        @default(true)
+  assets   AssetProfile[]
+  items    Item[]
+
+  @@index([name])
+}
+
+model Item {
+  id                    Int                    @id @default(autoincrement())
+  uuid                  String                 @unique @default(uuid())
+  itemCode              String                 @unique
+  itemName              String
+  categoryId            Int
+  subCategoryId         Int?
+  unitId                Int
+  brandId               Int?
+  defaultVendorId       Int?
+  itemType              String                 @default("NON_SERIALIZED")
+  isSerialized          Boolean                @default(false)
+  hasWarranty           Boolean                @default(false)
+  warrantyMonths        Int?
+  hasAMC                Boolean                @default(false)
+  amcMonths             Int?
+  hsnCode               String?
+  barcode               String?
+  qrCode                String?
+  minimumStockLevel     Decimal                @default(0)
+  maximumStockLevel     Decimal?
+  reorderLevel          Decimal?
+  description           String?
+  isActive              Boolean                @default(true)
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+  amcRecords            AMCRecord[]
+  assetInstallations    AssetInstallation[]
+  assets                AssetProfile[]
+  grnDetails            GoodsReceiptDetail[]
+  category              ItemCategory           @relation(fields: [categoryId], references: [id])
+  subCategory           ItemSubCategory?       @relation(fields: [subCategoryId], references: [id])
+  unit                  Unit                   @relation(fields: [unitId], references: [id])
+  brand                 Brand?                 @relation(fields: [brandId], references: [id])
+  itemVendorMappings    ItemVendorMapping[]
+  ledgers               LedgerEntry[]
+  demandItems           MaterialDemandItem[]
+  consumptionItems      MaterialConsumptionItem[]
+  priceHistory          PriceHistory[]
+  purchaseHistory       PurchaseHistory[]
+  poDetails             PurchaseOrderDetail[]
+  qualityChecks         QualityCheck[]
+  requisitionDetails    RequisitionDetail[]
+  serializedItems       SerializedItem[]
+  transactionDetails    TransactionDetail[]
+  warrantyRecords       WarrantyRecord[]
+   completionItems       WorkCompletionItem[]
+   workOrderSpareParts   WorkOrderSparePart[]
+   installationItems     MaterialInstallationItem[]
+
+  @@index([categoryId])
+  @@index([subCategoryId])
+  @@index([unitId])
+  @@index([brandId])
+  @@index([itemType])
+  @@index([isSerialized])
+  @@index([isActive])
+  @@index([barcode])
+  @@index([qrCode])
+}
+
+model Employee {
+  id           Int         @id @default(autoincrement())
+  uuid         String      @unique @default(uuid())
+  companyId    Int
+  departmentId Int?
+  employeeCode String      @unique
+  firstName    String
+  lastName     String?
+  phone        String?
+  email        String?
+  designation  String?
+  isActive     Boolean     @default(true)
+  createdAt    DateTime    @default(now())
+  company      Company     @relation(fields: [companyId], references: [id])
+  department   Department? @relation(fields: [departmentId], references: [id])
+
   @@index([companyId])
-  @@index([financialYearId])
-  @@index([date])
-  @@index([status])
-  @@index([vendorId])
-  @@index([companyId, financialYearId])
-  @@index([companyId, financialYearId, status])
-  @@index([companyId, financialYearId, date])
-}
-
-model ReceiptChallanItem {
-  id               Int            @id @default(autoincrement())
-  uuid             String         @unique @default(uuid())
-  receiptChallanId Int
-  itemId           Int
-  unitId           Int
-  quantity         Decimal
-  rate             Decimal        @default(0)
-  amount           Decimal        @default(0)
-  locationId       Int?
-  remarks          String?
-  location         Location?      @relation(fields: [locationId], references: [id])
-  unit             Unit           @relation(fields: [unitId], references: [id])
-  item             Item           @relation(fields: [itemId], references: [id])
-  receiptChallan   ReceiptChallan @relation(fields: [receiptChallanId], references: [id])
-
-  @@index([receiptChallanId])
-  @@index([itemId])
-}
-
-model IssueChallan {
-  id              Int                @id @default(autoincrement())
-  uuid            String             @unique @default(uuid())
-  challanNo       String
-  companyId       Int
-  financialYearId Int
-  departmentId    Int
-  sourceStoreId   Int?
-  date            DateTime
-  issuedBy        String
-  approvedBy      String?
-  purpose         String?
-  remarks         String?
-  status          String             @default("Draft")
-  postedAt        DateTime?
-  postedBy        String?
-  cancelledAt     DateTime?
-  cancelReason    String?
-  createdAt       DateTime           @default(now())
-  updatedAt       DateTime           @updatedAt
-  serialNo        String?
-  sourceStore     Department?        @relation("IssueSourceStore", fields: [sourceStoreId], references: [id])
-  department      Department         @relation(fields: [departmentId], references: [id])
-  financialYear   FinancialYear      @relation(fields: [financialYearId], references: [id])
-  company         Company            @relation(fields: [companyId], references: [id])
-  items           IssueChallanItem[]
-
-  @@unique([companyId, financialYearId, challanNo])
-  @@index([companyId])
-  @@index([financialYearId])
   @@index([departmentId])
-  @@index([sourceStoreId])
-  @@index([date])
+  @@index([employeeCode])
+}
+
+model ReasonMaster {
+  id           Int                 @id @default(autoincrement())
+  uuid         String              @unique @default(uuid())
+  reasonType   String
+  name         String
+  description  String?
+  isActive     Boolean             @default(true)
+  transactions TransactionHeader[]
+
+  @@unique([reasonType, name])
+  @@index([reasonType])
+}
+
+model WarrantyRecord {
+  id            Int      @id @default(autoincrement())
+  uuid          String   @unique @default(uuid())
+  itemId        Int
+  serialNumber  String?
+  vendorName    String?
+  purchaseDate  DateTime
+  warrantyStart DateTime
+  warrantyEnd   DateTime
+  status        String   @default("ACTIVE")
+  remarks       String?
+  createdAt     DateTime @default(now())
+  item          Item     @relation(fields: [itemId], references: [id])
+
+  @@index([itemId])
+  @@index([serialNumber])
   @@index([status])
-  @@index([companyId, financialYearId])
-  @@index([companyId, financialYearId, status])
-  @@index([companyId, financialYearId, departmentId])
+  @@index([warrantyEnd])
 }
 
-model IssueChallanItem {
-  id             Int          @id @default(autoincrement())
-  uuid           String       @unique @default(uuid())
-  issueChallanId Int
-  itemId         Int
-  unitId         Int
-  quantity       Decimal
-  locationId     Int?
-  usedAt         String?
-  purpose        String?
-  remarks        String?
-  location       Location?    @relation(fields: [locationId], references: [id])
-  unit           Unit         @relation(fields: [unitId], references: [id])
-  item           Item         @relation(fields: [itemId], references: [id])
-  issueChallan   IssueChallan @relation(fields: [issueChallanId], references: [id])
+model AMCRecord {
+  id           Int      @id @default(autoincrement())
+  uuid         String   @unique @default(uuid())
+  itemId       Int
+  serialNumber String?
+  vendorName   String?
+  amcStart     DateTime
+  amcEnd       DateTime
+  amount       Decimal  @default(0)
+  status       String   @default("ACTIVE")
+  remarks      String?
+  createdAt    DateTime @default(now())
+  item         Item     @relation(fields: [itemId], references: [id])
 
-  @@index([issueChallanId])
   @@index([itemId])
-  @@index([locationId])
-}
-
-model TransferChallan {
-  id               Int                   @id @default(autoincrement())
-  uuid             String                @unique @default(uuid())
-  challanNo        String
-  companyId        Int
-  financialYearId  Int
-  date             DateTime
-  fromDepartmentId Int
-  toDepartmentId   Int
-  transferredBy    String
-  approvedBy       String?
-  remarks          String?
-  status           String                @default("Draft")
-  postedAt         DateTime?
-  postedBy         String?
-  cancelledAt      DateTime?
-  cancelReason     String?
-  createdAt        DateTime              @default(now())
-  updatedAt        DateTime              @updatedAt
-  toDepartment     Department            @relation("ToDepartment", fields: [toDepartmentId], references: [id])
-  fromDepartment   Department            @relation("FromDepartment", fields: [fromDepartmentId], references: [id])
-  financialYear    FinancialYear         @relation(fields: [financialYearId], references: [id])
-  company          Company               @relation(fields: [companyId], references: [id])
-  items            TransferChallanItem[]
-
-  @@unique([companyId, financialYearId, challanNo])
-  @@index([companyId])
-  @@index([financialYearId])
-  @@index([fromDepartmentId])
-  @@index([toDepartmentId])
-  @@index([date])
+  @@index([serialNumber])
   @@index([status])
-  @@index([companyId, financialYearId])
-  @@index([companyId, financialYearId, status])
-}
-
-model TransferChallanItem {
-  id                Int             @id @default(autoincrement())
-  uuid              String          @unique @default(uuid())
-  transferChallanId Int
-  itemId            Int
-  quantity          Decimal
-  rate              Decimal         @default(0)
-  locationId        Int?
-  toLocationId      Int?
-  remarks           String?
-  toLocation        Location?       @relation("TransferToLocation", fields: [toLocationId], references: [id])
-  location          Location?       @relation(fields: [locationId], references: [id])
-  item              Item            @relation(fields: [itemId], references: [id])
-  transferChallan   TransferChallan @relation(fields: [transferChallanId], references: [id])
-
-  @@index([transferChallanId])
-  @@index([itemId])
-  @@index([locationId])
-  @@index([toLocationId])
-}
-
-model StockTransaction {
-  id              Int           @id @default(autoincrement())
-  uuid            String        @unique @default(uuid())
-  companyId       Int
-  financialYearId Int
-  itemId          Int
-  departmentId    Int?
-  locationId      Int?
-  transactionType String
-  transactionDate DateTime
-  quantityIn      Decimal       @default(0)
-  quantityOut     Decimal       @default(0)
-  rate            Decimal       @default(0)
-  balanceQty      Decimal
-  referenceType   String?
-  referenceId     Int?
-  referenceNo     String?
-  remarks         String?
-  createdAt       DateTime      @default(now())
-  createdBy       String
-  condition       String?       @default("GOOD")
-  refTransferId   String?
-  location        Location?     @relation(fields: [locationId], references: [id])
-  department      Department?   @relation(fields: [departmentId], references: [id])
-  item            Item          @relation(fields: [itemId], references: [id])
-  financialYear   FinancialYear @relation(fields: [financialYearId], references: [id])
-  company         Company       @relation(fields: [companyId], references: [id])
-
-  @@index([companyId, financialYearId, itemId])
-  @@index([companyId, financialYearId, transactionType])
-  @@index([companyId, financialYearId, transactionDate])
-  @@index([itemId, transactionType])
-  @@index([referenceType, referenceId])
-  @@index([createdAt])
-  @@index([departmentId])
-  @@index([locationId])
-  @@index([refTransferId])
-  @@index([itemId, locationId, id])
-  @@index([condition])
-  @@index([itemId, transactionDate])
-  @@index([companyId, itemId])
-}
-
-model OpeningStock {
-  id              Int           @id @default(autoincrement())
-  uuid            String        @unique @default(uuid())
-  financialYearId Int
-  itemId          Int
-  quantity        Decimal
-  rate            Decimal       @default(0)
-  createdAt       DateTime      @default(now())
-  item            Item          @relation(fields: [itemId], references: [id])
-  financialYear   FinancialYear @relation(fields: [financialYearId], references: [id])
-
-  @@unique([financialYearId, itemId])
-  @@index([financialYearId])
-  @@index([itemId])
+  @@index([amcEnd])
 }
 
 model AssetInstallation {
-  id             Int      @id @default(autoincrement())
-  uuid           String   @unique @default(uuid())
-  itemId         Int
-  locationId     Int
-  issueChallanId Int?
-  installedDate  DateTime
-  quantity       Decimal
-  installedBy    String?
-  status         String   @default("Active")
-  remarks        String?
-  createdAt      DateTime @default(now())
-  location       Location @relation(fields: [locationId], references: [id])
-  item           Item     @relation(fields: [itemId], references: [id])
+  id              Int       @id @default(autoincrement())
+  uuid            String    @unique @default(uuid())
+  itemId          Int
+  roomId          Int
+  storeId         Int
+  quantity        Decimal   @default(1)
+  installedDate   DateTime
+  installedBy     String?
+  uninstalledDate DateTime?
+  uninstalledBy   String?
+  status          String    @default("ACTIVE")
+  remarks         String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  item            Item      @relation(fields: [itemId], references: [id])
+  room            Room      @relation(fields: [roomId], references: [id])
+  store           Store     @relation(fields: [storeId], references: [id])
 
   @@index([itemId])
-  @@index([locationId])
+  @@index([roomId])
+  @@index([storeId])
   @@index([status])
 }
 
-model DamageEntry {
-  id                    Int       @id @default(autoincrement())
-  uuid                  String    @unique @default(uuid())
-  companyId             Int?
-  itemId                Int
-  locationId            Int?
-  assetInstallationId   Int?
-  date                  DateTime
-  quantity              Decimal
-  reason                String
-  reportedBy            String
-  remarks               String?
-  originalPurchaseDate  DateTime?
-  originalVendorName    String?
-  originalInvoiceNumber String?
-  originalRate          Decimal?
-  status                String    @default("Posted")
-  createdAt             DateTime  @default(now())
-  location              Location? @relation(fields: [locationId], references: [id])
-  item                  Item      @relation(fields: [itemId], references: [id])
-  company               Company?  @relation(fields: [companyId], references: [id])
+model AssetProfile {
+  id                  Int                   @id @default(autoincrement())
+  uuid                String                @unique @default(uuid())
+  assetCode           String                @unique
+  qrCode              String?               @unique
+  barcode             String?               @unique
+  serialNumber        String?
+  companyId           Int
+  assetName           String
+  itemId              Int
+  brandId             Int?
+  modelNumber         String?
+  description         String?
+  purchaseDate        DateTime?
+  purchaseCost        Decimal?              @default(0)
+  vendorId            Int?
+  invoiceNumber       String?
+  purchaseOrderId     String?
+  grnNumber           String?
+  currentStoreId      Int?
+  currentLocationId   Int?
+  currentRoomId       Int?
+  currentDepartmentId Int?
+  status              String                @default("PURCHASED")
+  condition           String                @default("EXCELLENT")
+  installationDate    DateTime?
+  expectedLifeYears   Int?                  @default(5)
+  expectedLifeMonths  Int?                  @default(0)
+  disposalDate        DateTime?
+  disposalReason      String?
+  healthScore         Int                   @default(100)
+  repairCount         Int                   @default(0)
+  totalRepairCost     Decimal               @default(0)
+  warrantyStart       DateTime?
+  warrantyEnd         DateTime?
+  warrantyVendor      String?
+  warrantyTerms       String?
+  amcStart            DateTime?
+  amcEnd              DateTime?
+  amcVendor           String?
+  amcAmount           Decimal?              @default(0)
+  amcTerms            String?
+  photoUrl            String?
+  remarks             String?
+  createdBy           String?
+  isActive            Boolean               @default(true)
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+  amcAgreements       AMCAgreement[]
+  documents           AssetDocument[]
+  movements           AssetMovement[]
+  photos              AssetPhoto[]
+  company             Company               @relation(fields: [companyId], references: [id])
+  item                Item                  @relation(fields: [itemId], references: [id])
+  brand               Brand?                @relation(fields: [brandId], references: [id])
+  vendor              Vendor?               @relation(fields: [vendorId], references: [id])
+  currentStore        Store?                @relation("AssetCurrentStore", fields: [currentStoreId], references: [id])
+  currentLocation     Location?             @relation("AssetCurrentLocation", fields: [currentLocationId], references: [id])
+  currentRoom         Room?                 @relation("AssetCurrentRoom", fields: [currentRoomId], references: [id])
+  currentDepartment   Department?           @relation("AssetCurrentDept", fields: [currentDepartmentId], references: [id])
+  services            AssetServiceHistory[]
+  timeline            AssetTimeline[]
+  breakdownHistory    BreakdownHistory[]
+  maintenanceHistory  MaintenanceHistory[]
+  serviceRequests     ServiceRequest[]
+  serviceSchedules    ServiceSchedule[]
+  warrantyClaims      WarrantyClaim[]
+  workOrders          WorkOrder[]
 
   @@index([companyId])
+  @@index([assetCode])
+  @@index([serialNumber])
   @@index([itemId])
-  @@index([locationId])
-  @@index([date])
+  @@index([status])
+  @@index([condition])
+  @@index([currentStoreId])
+  @@index([currentRoomId])
+  @@index([currentDepartmentId])
+  @@index([healthScore])
+  @@index([warrantyEnd])
+  @@index([amcEnd])
+  @@index([companyId, status])
+  @@index([companyId, currentStoreId])
+  @@index([companyId, status, currentStoreId])
+  @@index([status, currentStoreId, currentDepartmentId])
 }
 
-model StockAdjustment {
-  id              Int           @id @default(autoincrement())
-  uuid            String        @unique @default(uuid())
+model AssetTimeline {
+  id               Int          @id @default(autoincrement())
+  uuid             String       @unique @default(uuid())
+  assetId          Int
+  eventType        String
+  eventDate        DateTime
+  voucherNo        String?
+  transactionId    Int?
+  fromStoreId      Int?
+  fromLocationId   Int?
+  fromRoomId       Int?
+  fromDepartmentId Int?
+  toStoreId        Int?
+  toLocationId     Int?
+  toRoomId         Int?
+  toDepartmentId   Int?
+  performedBy      String?
+  reason           String?
+  remarks          String?
+  metadata         String?
+  createdAt        DateTime     @default(now())
+  asset            AssetProfile @relation(fields: [assetId], references: [id])
+
+  @@index([assetId])
+  @@index([eventType])
+  @@index([eventDate])
+  @@index([voucherNo])
+}
+
+model AssetPhoto {
+  id        Int          @id @default(autoincrement())
+  uuid      String       @unique @default(uuid())
+  assetId   Int
+  photoType String
+  fileName  String
+  filePath  String
+  fileSize  Int?
+  mimeType  String?
+  caption   String?
+  takenAt   DateTime?
+  takenBy   String?
+  createdAt DateTime     @default(now())
+  asset     AssetProfile @relation(fields: [assetId], references: [id])
+
+  @@index([assetId])
+  @@index([photoType])
+}
+
+model AssetDocument {
+  id           Int          @id @default(autoincrement())
+  uuid         String       @unique @default(uuid())
+  assetId      Int
+  documentType String
+  fileName     String
+  filePath     String
+  fileSize     Int?
+  mimeType     String?
+  description  String?
+  uploadedBy   String?
+  createdAt    DateTime     @default(now())
+  asset        AssetProfile @relation(fields: [assetId], references: [id])
+
+  @@index([assetId])
+  @@index([documentType])
+}
+
+model AssetServiceHistory {
+  id              Int          @id @default(autoincrement())
+  uuid            String       @unique @default(uuid())
+  assetId         Int
+  serviceDate     DateTime
+  serviceType     String
+  description     String?
+  engineerName    String?
+  engineerContact String?
+  vendorId        Int?
+  vendorName      String?
+  cost            Decimal      @default(0)
+  conditionBefore String?
+  conditionAfter  String?
+  warrantyClaim   Boolean      @default(false)
+  nextServiceDate DateTime?
+  remarks         String?
+  photoBeforePath String?
+  photoAfterPath  String?
+  createdAt       DateTime     @default(now())
+  asset           AssetProfile @relation(fields: [assetId], references: [id])
+
+  @@index([assetId])
+  @@index([serviceDate])
+  @@index([serviceType])
+  @@index([vendorId])
+}
+
+model AssetMovement {
+  id               Int                @id @default(autoincrement())
+  uuid             String             @unique @default(uuid())
+  assetId          Int
+  transactionId    Int?
+  voucherNo        String?
+  movementType     String
+  movementDate     DateTime
+  fromStoreId      Int?
+  fromLocationId   Int?
+  fromRoomId       Int?
+  fromDepartmentId Int?
+  toStoreId        Int?
+  toLocationId     Int?
+  toRoomId         Int?
+  toDepartmentId   Int?
+  performedBy      String?
+  reason           String?
+  remarks          String?
+  createdAt        DateTime           @default(now())
+  asset            AssetProfile       @relation(fields: [assetId], references: [id])
+  transaction      TransactionHeader? @relation(fields: [transactionId], references: [id])
+
+  @@index([assetId])
+  @@index([transactionId])
+  @@index([movementType])
+  @@index([movementDate])
+}
+
+model TransactionHeader {
+  id              Int                 @id @default(autoincrement())
+  uuid            String              @unique @default(uuid())
   companyId       Int
   financialYearId Int
+  voucherNo       String
+  voucherType     String
+  transactionDate DateTime
+  invoiceDate     DateTime?
+  fromStoreId     Int?
+  toStoreId       Int?
+  fromLocationId  Int?
+  toLocationId    Int?
+  vendorId        Int?
+  reasonId        Int?
   departmentId    Int?
-  locationId      Int?
-  date            DateTime
-  itemId          Int
-  adjustmentType  String
-  quantity        Decimal
-  reason          String
-  adjustedBy      String
+  approvalStatus  String              @default("DRAFT")
   approvedBy      String?
+  approvedAt      DateTime?
+  postedBy        String?
+  postedAt        DateTime?
+  cancelledBy     String?
+  cancelledAt     DateTime?
+  cancelReason    String?
+  referenceNo     String?
+  vehicleNumber   String?
+  receivedBy      String?
+  issuedBy        String?
+  purpose         String?
   remarks         String?
-  status          String        @default("Posted")
-  createdAt       DateTime      @default(now())
-  location        Location?     @relation(fields: [locationId], references: [id])
-  department      Department?   @relation(fields: [departmentId], references: [id])
-  item            Item          @relation(fields: [itemId], references: [id])
-  financialYear   FinancialYear @relation(fields: [financialYearId], references: [id])
-  company         Company       @relation(fields: [companyId], references: [id])
+  createdBy       String
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+  assetMovements  AssetMovement[]
+  ledgers         LedgerEntry[]
+  requisitions    RequisitionHeader[]
+  serialMovements SerialMovement[]
+  details         TransactionDetail[]
+  demandAllocations DemandAllocation[]
+  consumptions      MaterialConsumption[]
+   consumptionItems  MaterialConsumptionItem[]
+   installationItems  MaterialInstallationItem[]
+   company         Company             @relation(fields: [companyId], references: [id])
+  financialYear   FinancialYear       @relation(fields: [financialYearId], references: [id])
+  fromStore       Store?              @relation("TxFromStore", fields: [fromStoreId], references: [id])
+  toStore         Store?              @relation("TxToStore", fields: [toStoreId], references: [id])
+  fromLocation    Location?           @relation("TxFromLocation", fields: [fromLocationId], references: [id])
+  toLocation      Location?           @relation("TxToLocation", fields: [toLocationId], references: [id])
+  department      Department?         @relation(fields: [departmentId], references: [id])
+  vendor          Vendor?             @relation(fields: [vendorId], references: [id])
+  reason          ReasonMaster?       @relation(fields: [reasonId], references: [id])
 
-  @@index([companyId, financialYearId])
-  @@index([itemId])
-  @@index([departmentId])
-  @@index([locationId])
-  @@index([companyId, financialYearId, itemId])
-}
-
-model VendorReturnChallan {
-  id                Int                       @id @default(autoincrement())
-  uuid              String                    @unique @default(uuid())
-  challanNo         String
-  companyId         Int
-  financialYearId   Int
-  vendorId          Int
-  originalReceiptId Int?
-  date              DateTime
-  reason            String
-  returnedBy        String
-  remarks           String?
-  status            String                    @default("Draft")
-  postedAt          DateTime?
-  postedBy          String?
-  cancelledAt       DateTime?
-  cancelReason      String?
-  createdAt         DateTime                  @default(now())
-  updatedAt         DateTime                  @updatedAt
-  originalReceipt   ReceiptChallan?           @relation(fields: [originalReceiptId], references: [id])
-  vendor            Vendor                    @relation(fields: [vendorId], references: [id])
-  financialYear     FinancialYear             @relation(fields: [financialYearId], references: [id])
-  company           Company                   @relation(fields: [companyId], references: [id])
-  items             VendorReturnChallanItem[]
-
-  @@unique([companyId, financialYearId, challanNo])
+  @@unique([companyId, financialYearId, voucherNo])
   @@index([companyId])
   @@index([financialYearId])
+  @@index([voucherType])
+  @@index([transactionDate])
+  @@index([approvalStatus])
+  @@index([fromStoreId])
+  @@index([toStoreId])
   @@index([vendorId])
-  @@index([date])
-  @@index([status])
   @@index([companyId, financialYearId])
-  @@index([companyId, financialYearId, status])
+  @@index([companyId, financialYearId, voucherType])
+  @@index([companyId, financialYearId, approvalStatus])
+  @@index([companyId, financialYearId, voucherType, approvalStatus])
+  @@index([companyId, transactionDate])
+  @@index([fromStoreId, transactionDate])
+  @@index([toStoreId, transactionDate])
+  @@index([companyId, financialYearId, transactionDate])
 }
 
-model VendorReturnChallanItem {
-  id                    Int                 @id @default(autoincrement())
-  uuid                  String              @unique @default(uuid())
-  vendorReturnChallanId Int
-  itemId                Int
-  quantity              Decimal
-  rate                  Decimal             @default(0)
-  item                  Item                @relation(fields: [itemId], references: [id])
-  vendorReturnChallan   VendorReturnChallan @relation(fields: [vendorReturnChallanId], references: [id])
+model TransactionDetail {
+  id             Int               @id @default(autoincrement())
+  uuid           String            @unique @default(uuid())
+  transactionId  Int
+  itemId         Int
+  unitId         Int?
+  quantity       Decimal
+  rate           Decimal           @default(0)
+  amount         Decimal           @default(0)
+  serialNumber   String?
+  batchNumber    String?
+  condition      String            @default("GOOD")
+  warrantyExpiry DateTime?
+  fromLocationId Int?
+  toLocationId   Int?
+  remarks        String?
+  createdAt      DateTime          @default(now())
+  transaction    TransactionHeader @relation(fields: [transactionId], references: [id])
+  item           Item              @relation(fields: [itemId], references: [id])
+  fromLocation   Location?         @relation("TxDetailFromLocation", fields: [fromLocationId], references: [id])
+  toLocation     Location?         @relation("TxDetailToLocation", fields: [toLocationId], references: [id])
 
-  @@index([vendorReturnChallanId])
+  @@index([transactionId])
   @@index([itemId])
+  @@index([serialNumber])
+  @@index([batchNumber])
+  @@index([condition])
+}
+
+model LedgerEntry {
+  id              Int                @id @default(autoincrement())
+  uuid            String             @unique @default(uuid())
+  companyId       Int
+  financialYearId Int
+  transactionId   Int?
+  itemId          Int
+  storeId         Int
+  locationId      Int?
+  voucherNo       String
+  voucherType     String
+  movementType    String
+  quantityIn      Decimal            @default(0)
+  quantityOut     Decimal            @default(0)
+  balanceQty      Decimal            @default(0)
+  rate            Decimal            @default(0)
+  condition       String             @default("GOOD")
+  serialNumber    String?
+  batchNumber     String?
+  transactionDate DateTime
+  createdBy       String
+  createdAt       DateTime           @default(now())
+  company         Company            @relation(fields: [companyId], references: [id])
+  financialYear   FinancialYear      @relation(fields: [financialYearId], references: [id])
+  transaction     TransactionHeader? @relation(fields: [transactionId], references: [id])
+  item            Item               @relation(fields: [itemId], references: [id])
+  store           Store              @relation(fields: [storeId], references: [id])
+  location        Location?          @relation(fields: [locationId], references: [id])
+
+  @@index([companyId, financialYearId, itemId])
+  @@index([companyId, financialYearId, storeId])
+  @@index([companyId, financialYearId, itemId, storeId])
+  @@index([companyId, financialYearId, movementType])
+  @@index([companyId, financialYearId, transactionDate])
+  @@index([itemId, storeId])
+  @@index([itemId, transactionDate])
+  @@index([transactionId])
+  @@index([voucherNo])
+  @@index([storeId, itemId, financialYearId])
+  @@index([serialNumber])
+  @@index([batchNumber])
+  @@index([createdAt])
+  @@index([companyId, financialYearId, storeId, itemId])
+  @@index([companyId, financialYearId, movementType, transactionDate])
+  @@index([itemId, storeId, financialYearId, transactionDate])
+}
+
+model SerializedItem {
+  id                Int              @id @default(autoincrement())
+  uuid              String           @unique @default(uuid())
+  itemId            Int
+  serialNumber      String
+  batchNumber       String?
+  assetTag          String?
+  manufactureDate   DateTime?
+  purchaseDate      DateTime?
+  warrantyExpiry    DateTime?
+  currentStoreId    Int?
+  currentLocationId Int?
+  currentRoomId     Int?
+  status            String           @default("AVAILABLE")
+  condition         String           @default("GOOD")
+  purchasePrice     Decimal?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+  serialMovements   SerialMovement[]
+  item              Item             @relation(fields: [itemId], references: [id])
+  currentStore      Store?           @relation(fields: [currentStoreId], references: [id])
+
+  @@unique([itemId, serialNumber])
+  @@index([itemId])
+  @@index([serialNumber])
+  @@index([currentStoreId])
+  @@index([currentRoomId])
+  @@index([status])
+  @@index([condition])
+  @@index([batchNumber])
+  @@index([assetTag])
+}
+
+model SerialMovement {
+  id               Int                @id @default(autoincrement())
+  uuid             String             @unique @default(uuid())
+  serializedItemId Int
+  transactionId    Int?
+  movementType     String
+  fromStoreId      Int?
+  toStoreId        Int?
+  fromLocationId   Int?
+  toLocationId     Int?
+  fromRoomId       Int?
+  toRoomId         Int?
+  movementDate     DateTime
+  remarks          String?
+  createdBy        String
+  createdAt        DateTime           @default(now())
+  serializedItem   SerializedItem     @relation(fields: [serializedItemId], references: [id])
+  transaction      TransactionHeader? @relation(fields: [transactionId], references: [id])
+
+  @@index([serializedItemId])
+  @@index([transactionId])
+  @@index([movementType])
+  @@index([movementDate])
+}
+
+model VoucherSequence {
+  id              Int           @id @default(autoincrement())
+  companyId       Int
+  financialYearId Int
+  voucherType     String
+  lastNumber      Int           @default(0)
+  company         Company       @relation(fields: [companyId], references: [id])
+  financialYear   FinancialYear @relation(fields: [financialYearId], references: [id])
+
+  @@unique([companyId, financialYearId, voucherType])
+  @@index([companyId])
+  @@index([financialYearId])
+}
+
+model SystemConfiguration {
+  id          Int      @id @default(autoincrement())
+  companyId   Int
+  key         String
+  value       String
+  category    String   @default("GENERAL")
+  description String?
+  dataType    String   @default("string")
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  company     Company  @relation(fields: [companyId], references: [id])
+
+  @@unique([companyId, key])
+  @@index([companyId])
+  @@index([category])
+}
+
+model TransferMatrix {
+  id               Int      @id @default(autoincrement())
+  companyId        Int
+  fromStoreType    String
+  toStoreType      String
+  isAllowed        Boolean  @default(true)
+  requiresApproval Boolean  @default(false)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@unique([companyId, fromStoreType, toStoreType])
+  @@index([companyId])
 }
 
 model User {
-  id           Int            @id @default(autoincrement())
-  uuid         String         @unique @default(uuid())
-  username     String         @unique
-  passwordHash String
-  fullName     String
-  role         String         @default("USER")
-  permissions  String         @default("[]")
-  isActive     Boolean        @default(true)
-  createdAt    DateTime       @default(now())
-  updatedAt    DateTime       @updatedAt
-  auditLogs    AuditLog[]
-  loginHistory LoginHistory[]
+  id                  Int                 @id @default(autoincrement())
+  uuid                String              @unique @default(uuid())
+  username            String              @unique
+  passwordHash        String
+  fullName            String
+  role                String              @default("USER")
+  roleId              Int?
+  permissions         String              @default("[]")
+  isActive            Boolean             @default(true)
+  passwordExpiry      DateTime?
+  failedLoginAttempts Int                 @default(0)
+  lockedUntil         DateTime?
+  lastPasswordChange  DateTime?
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+  approvalActions     ApprovalAction[]
+  auditLogs           AuditLog[]
+  loginHistory        LoginHistory[]
+  notifications       Notification[]
+  requisitions        RequisitionHeader[]
+  sessions            Session[]
+  userRole            Role?               @relation(fields: [roleId], references: [id])
+
+  @@index([username])
+  @@index([role])
+  @@index([roleId])
 }
 
 model LoginHistory {
@@ -568,49 +942,1325 @@ model AuditLog {
   oldValues   String?
   newValues   String?
   description String?
+  ipAddress   String?
   createdAt   DateTime @default(now())
   user        User?    @relation(fields: [userId], references: [id])
   company     Company? @relation(fields: [companyId], references: [id])
 
   @@index([companyId])
+  @@index([companyId, createdAt])
   @@index([tableName, recordId])
   @@index([userId])
   @@index([createdAt])
   @@index([action])
 }
 
-model ChallanSequence {
-  id              Int           @id @default(autoincrement())
-  companyId       Int
-  financialYearId Int
-  challanType     String
-  lastNumber      Int           @default(0)
-  company         Company       @relation(fields: [companyId], references: [id])
-  financialYear   FinancialYear @relation(fields: [financialYearId], references: [id])
-
-  @@unique([companyId, financialYearId, challanType])
-}
-
 model ImportHistory {
-  id              Int         @id @default(autoincrement())
-  uuid            String      @unique @default(uuid())
+  id              Int            @id @default(autoincrement())
+  uuid            String         @unique @default(uuid())
   fileName        String
   importType      String
-  level           String?
-  departmentId    Int?
-  departmentName  String?
-  rowCount        Int         @default(0)
-  importedCount   Int         @default(0)
-  status          String      @default("completed")
+  rowCount        Int            @default(0)
+  importedCount   Int            @default(0)
+  errorCount      Int            @default(0)
+  status          String         @default("completed")
   companyId       Int
-  financialYearId Int
-  createdAt       DateTime    @default(now())
-  deletedAt       DateTime?
-  company         Company     @relation(fields: [companyId], references: [id])
-  financialYear   FinancialYear @relation(fields: [financialYearId], references: [id])
+  financialYearId Int?
+  errors          String?
+  createdAt       DateTime       @default(now())
+  company         Company        @relation(fields: [companyId], references: [id])
+  financialYear   FinancialYear? @relation(fields: [financialYearId], references: [id])
 
   @@index([companyId])
-  @@index([financialYearId])
   @@index([importType])
   @@index([status])
+}
+
+model ApprovalWorkflow {
+  id           Int                 @id @default(autoincrement())
+  uuid         String              @unique @default(uuid())
+  companyId    Int
+  name         String
+  workflowType String
+  isEnabled    Boolean             @default(true)
+  isDefault    Boolean             @default(false)
+  description  String?
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+  levels       ApprovalLevel[]
+  company      Company             @relation(fields: [companyId], references: [id])
+  requests     RequisitionHeader[]
+
+  @@unique([companyId, workflowType, name])
+  @@index([companyId])
+  @@index([workflowType])
+  @@index([isEnabled])
+}
+
+model ApprovalLevel {
+  id                   Int              @id @default(autoincrement())
+  uuid                 String           @unique @default(uuid())
+  workflowId           Int
+  levelNumber          Int
+  levelName            String
+  approverType         String
+  approverId           Int?
+  approverRole         String?
+  autoApprove          Boolean          @default(false)
+  autoApproveThreshold Float?
+  timeoutHours         Int?
+  isActive             Boolean          @default(true)
+  createdAt            DateTime         @default(now())
+  approvals            ApprovalAction[]
+  workflow             ApprovalWorkflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+
+  @@index([workflowId])
+  @@index([levelNumber])
+  @@index([approverType])
+}
+
+model RequisitionHeader {
+  id                   Int                 @id @default(autoincrement())
+  uuid                 String              @unique @default(uuid())
+  requisitionNumber    String              @unique
+  companyId            Int
+  financialYearId      Int
+  requestDate          DateTime            @default(now())
+  requestType          String
+  priority             String              @default("MEDIUM")
+  status               String              @default("DRAFT")
+  requestedById        Int
+  requestedByName      String
+  departmentId         Int?
+  departmentName       String?
+  dharmshalaName       String?
+  sourceStoreId        Int?
+  sourceStoreName      String?
+  sourceLocationId     Int?
+  sourceRoomId         Int?
+  destStoreId          Int?
+  destStoreName        String?
+  destLocationId       Int?
+  destRoomId           Int?
+  destDepartmentId     Int?
+  destDepartmentName   String?
+  requiredDate         DateTime?
+  completedDate        DateTime?
+  currentApprovalLevel Int?
+  totalApprovalLevels  Int?
+  approvalWorkflowId   Int?
+  transactionHeaderId  Int?
+  remarks              String?
+  rejectionReason      String?
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+  approvals            ApprovalAction[]
+  notifications        Notification[]
+  details              RequisitionDetail[]
+  company              Company             @relation(fields: [companyId], references: [id])
+  financialYear        FinancialYear       @relation(fields: [financialYearId], references: [id])
+  requestedBy          User                @relation(fields: [requestedById], references: [id])
+  department           Department?         @relation(fields: [departmentId], references: [id])
+  sourceStore          Store?              @relation("SourceStore", fields: [sourceStoreId], references: [id])
+  destStore            Store?              @relation("DestStore", fields: [destStoreId], references: [id])
+  destDepartment       Department?         @relation("DestDepartment", fields: [destDepartmentId], references: [id])
+  approvalWorkflow     ApprovalWorkflow?   @relation(fields: [approvalWorkflowId], references: [id])
+  transactionHeader    TransactionHeader?  @relation(fields: [transactionHeaderId], references: [id])
+
+  @@unique([companyId, requisitionNumber])
+  @@index([companyId])
+  @@index([requisitionNumber])
+  @@index([requestType])
+  @@index([status])
+  @@index([priority])
+  @@index([requestedById])
+  @@index([requestDate])
+  @@index([departmentId])
+  @@index([sourceStoreId])
+  @@index([destStoreId])
+  @@index([companyId, status])
+  @@index([companyId, requestType])
+  @@index([companyId, status, requestDate])
+  @@index([companyId, requestType, status])
+}
+
+model RequisitionDetail {
+  id                  Int               @id @default(autoincrement())
+  uuid                String            @unique @default(uuid())
+  requisitionHeaderId Int
+  lineNumber          Int
+  itemId              Int
+  itemName            String
+  itemCode            String?
+  requestedQty        Float
+  approvedQty         Float             @default(0)
+  issuedQty           Float             @default(0)
+  pendingQty          Float             @default(0)
+  unitId              Int?
+  unitName            String?
+  reason              String?
+  remarks             String?
+  status              String            @default("PENDING")
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+  header              RequisitionHeader @relation(fields: [requisitionHeaderId], references: [id], onDelete: Cascade)
+  item                Item              @relation(fields: [itemId], references: [id])
+
+  @@index([requisitionHeaderId])
+  @@index([itemId])
+  @@index([status])
+}
+
+model ApprovalAction {
+  id                  Int               @id @default(autoincrement())
+  uuid                String            @unique @default(uuid())
+  requisitionHeaderId Int
+  approvalLevelId     Int?
+  levelNumber         Int
+  action              String
+  actionById          Int
+  actionByName        String
+  actionDate          DateTime          @default(now())
+  oldStatus           String?
+  newStatus           String?
+  remarks             String?
+  ipAddress           String?
+  deviceInfo          String?
+  quantity            Float?
+  header              RequisitionHeader @relation(fields: [requisitionHeaderId], references: [id], onDelete: Cascade)
+  level               ApprovalLevel?    @relation(fields: [approvalLevelId], references: [id])
+  actionBy            User              @relation(fields: [actionById], references: [id])
+
+  @@index([requisitionHeaderId])
+  @@index([approvalLevelId])
+  @@index([action])
+  @@index([actionById])
+  @@index([actionDate])
+}
+
+model Notification {
+  id                  Int                @id @default(autoincrement())
+  uuid                String             @unique @default(uuid())
+  companyId           Int
+  userId              Int
+  requisitionHeaderId Int?
+  type                String
+  title               String
+  message             String
+  isRead              Boolean            @default(false)
+  readAt              DateTime?
+  channel             String             @default("IN_APP")
+  sentAt              DateTime?
+  createdAt           DateTime           @default(now())
+  company             Company            @relation(fields: [companyId], references: [id])
+  user                User               @relation(fields: [userId], references: [id])
+  requisitionHeader   RequisitionHeader? @relation(fields: [requisitionHeaderId], references: [id])
+
+  @@index([companyId])
+  @@index([userId])
+  @@index([userId, isRead])
+  @@index([isRead])
+  @@index([type])
+  @@index([createdAt])
+}
+
+model Vendor {
+  id              Int                 @id @default(autoincrement())
+  uuid            String              @unique @default(uuid())
+  companyId       Int
+  vendorCode      String              @unique
+  vendorName      String
+  gstNumber       String?
+  panNumber       String?
+  contactPerson   String?
+  mobile          String?
+  email           String?
+  address         String?
+  city            String?
+  state           String?
+  country         String?             @default("India")
+  bankName        String?
+  bankAccountNo   String?
+  bankIfsc        String?
+  paymentTerms    String?             @default("NET30")
+  creditDays      Int?                @default(30)
+  vendorCategory  String?             @default("GENERAL")
+  vendorRating    Float?              @default(0)
+  isActive        Boolean             @default(true)
+  remarks         String?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+  assets          AssetProfile[]
+  goodsReceipts   GoodsReceipt[]
+  itemMappings    ItemVendorMapping[]
+  priceHistory    PriceHistory[]
+  purchaseHistory PurchaseHistory[]
+  purchaseOrders  PurchaseOrder[]
+  quotations      Quotation[]
+  transactions    TransactionHeader[]
+  company         Company             @relation(fields: [companyId], references: [id])
+  documents       VendorDocument[]
+
+  @@unique([companyId, vendorCode])
+  @@index([companyId])
+  @@index([vendorCode])
+  @@index([vendorName])
+  @@index([isActive])
+}
+
+model VendorDocument {
+  id           Int      @id @default(autoincrement())
+  uuid         String   @unique @default(uuid())
+  vendorId     Int
+  documentType String
+  fileName     String
+  filePath     String
+  fileSize     Int?
+  mimeType     String?
+  description  String?
+  uploadedBy   String?
+  createdAt    DateTime @default(now())
+  vendor       Vendor   @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  @@index([vendorId])
+  @@index([documentType])
+}
+
+model ItemVendorMapping {
+  id               Int      @id @default(autoincrement())
+  uuid             String   @unique @default(uuid())
+  itemId           Int
+  vendorId         Int
+  storeId          Int?
+  isDefault        Boolean  @default(false)
+  lastPurchaseRate Float?
+  leadTimeDays     Int?
+  minimumOrderQty  Float?
+  preferredVendor  Boolean  @default(false)
+  vendorRating     Float?   @default(0)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  item             Item     @relation(fields: [itemId], references: [id])
+  vendor           Vendor   @relation(fields: [vendorId], references: [id])
+
+  @@unique([itemId, vendorId, storeId])
+  @@index([itemId])
+  @@index([vendorId])
+  @@index([isDefault])
+}
+
+model Quotation {
+  id              Int             @id @default(autoincrement())
+  uuid            String          @unique @default(uuid())
+  companyId       Int
+  vendorId        Int
+  quotationNumber String?
+  quotationDate   DateTime        @default(now())
+  validUntil      DateTime?
+  totalAmount     Float           @default(0)
+  taxAmount       Float           @default(0)
+  netAmount       Float           @default(0)
+  status          String          @default("DRAFT")
+  remarks         String?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  company         Company         @relation(fields: [companyId], references: [id])
+  vendor          Vendor          @relation(fields: [vendorId], references: [id])
+  items           QuotationItem[]
+
+  @@index([companyId])
+  @@index([vendorId])
+  @@index([status])
+  @@index([quotationDate])
+}
+
+model QuotationItem {
+  id          Int       @id @default(autoincrement())
+  uuid        String    @unique @default(uuid())
+  quotationId Int
+  lineNumber  Int
+  itemId      Int
+  itemName    String
+  itemCode    String?
+  quantity    Float
+  rate        Float
+  discount    Float     @default(0)
+  taxRate     Float     @default(0)
+  taxAmount   Float     @default(0)
+  amount      Float     @default(0)
+  netAmount   Float     @default(0)
+  remarks     String?
+  createdAt   DateTime  @default(now())
+  quotation   Quotation @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+
+  @@index([quotationId])
+  @@index([itemId])
+}
+
+model PurchaseOrder {
+  id                 Int                   @id @default(autoincrement())
+  uuid               String                @unique @default(uuid())
+  poNumber           String                @unique
+  companyId          Int
+  financialYearId    Int
+  vendorId           Int
+  orderDate          DateTime              @default(now())
+  expectedDelivery   DateTime?
+  paymentTerms       String?
+  totalAmount        Float                 @default(0)
+  discountAmount     Float                 @default(0)
+  taxAmount          Float                 @default(0)
+  netAmount          Float                 @default(0)
+  status             String                @default("DRAFT")
+  approvedBy         String?
+  approvedAt         DateTime?
+  orderedBy          String?
+  orderedAt          DateTime?
+  remarks            String?
+  cancellationReason String?
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
+  goodsReceipts      GoodsReceipt[]
+  company            Company               @relation(fields: [companyId], references: [id])
+  financialYear      FinancialYear         @relation(fields: [financialYearId], references: [id])
+  vendor             Vendor                @relation(fields: [vendorId], references: [id])
+  details            PurchaseOrderDetail[]
+
+  @@unique([companyId, poNumber])
+  @@index([companyId])
+  @@index([companyId, status])
+  @@index([poNumber])
+  @@index([vendorId])
+  @@index([status])
+  @@index([orderDate])
+}
+
+model PurchaseOrderDetail {
+  id           Int           @id @default(autoincrement())
+  uuid         String        @unique @default(uuid())
+  poHeaderId   Int
+  lineNumber   Int
+  itemId       Int
+  itemName     String
+  itemCode     String?
+  description  String?
+  orderedQty   Float
+  receivedQty  Float         @default(0)
+  pendingQty   Float         @default(0)
+  unitId       Int?
+  unitName     String?
+  rate         Float
+  discount     Float         @default(0)
+  discountType String?       @default("PERCENT")
+  taxRate      Float         @default(0)
+  taxAmount    Float         @default(0)
+  amount       Float         @default(0)
+  netAmount    Float         @default(0)
+  status       String        @default("PENDING")
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  header       PurchaseOrder @relation(fields: [poHeaderId], references: [id], onDelete: Cascade)
+  item         Item          @relation(fields: [itemId], references: [id])
+
+  @@index([poHeaderId])
+  @@index([itemId])
+  @@index([status])
+}
+
+model GoodsReceipt {
+  id              Int                  @id @default(autoincrement())
+  uuid            String               @unique @default(uuid())
+  grnNumber       String               @unique
+  companyId       Int
+  financialYearId Int
+  poHeaderId      Int?
+  vendorId        Int
+  storeId         Int
+  receiptDate     DateTime             @default(now())
+  invoiceDate     DateTime?
+  invoiceNumber   String?
+  sourceType      String?
+  totalAmount     Float                @default(0)
+  status          String               @default("RECEIVED")
+  receivedBy      String?
+  inspectedBy     String?
+  inspectedAt     DateTime?
+  remarks         String?
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+  company         Company              @relation(fields: [companyId], references: [id])
+  financialYear   FinancialYear        @relation(fields: [financialYearId], references: [id])
+  purchaseOrder   PurchaseOrder?       @relation(fields: [poHeaderId], references: [id])
+  vendor          Vendor               @relation(fields: [vendorId], references: [id])
+  store           Store                @relation(fields: [storeId], references: [id])
+  details         GoodsReceiptDetail[]
+  qualityChecks   QualityCheck[]
+
+  @@unique([companyId, grnNumber])
+  @@index([companyId])
+  @@index([grnNumber])
+  @@index([poHeaderId])
+  @@index([vendorId])
+  @@index([storeId])
+  @@index([status])
+  @@index([receiptDate])
+}
+
+model GoodsReceiptDetail {
+  id                Int          @id @default(autoincrement())
+  uuid              String       @unique @default(uuid())
+  grnHeaderId       Int
+  lineNumber        Int
+  itemId            Int
+  itemName          String
+  itemCode          String?
+  poDetailId        Int?
+  orderedQty        Float?
+  receivedQty       Float
+  acceptedQty       Float        @default(0)
+  rejectedQty       Float        @default(0)
+  damagedQty        Float        @default(0)
+  pendingQty        Float        @default(0)
+  unitId            Int?
+  unitName          String?
+  rate              Float
+  amount            Float        @default(0)
+  batchNumber       String?
+  serialNumber      String?
+  manufacturingDate DateTime?
+  expiryDate        DateTime?
+  condition         String?      @default("GOOD")
+  remarks           String?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+  header            GoodsReceipt @relation(fields: [grnHeaderId], references: [id], onDelete: Cascade)
+  item              Item         @relation(fields: [itemId], references: [id])
+
+  @@index([grnHeaderId])
+  @@index([itemId])
+  @@index([poDetailId])
+  @@index([batchNumber])
+}
+
+model QualityCheck {
+  id                Int          @id @default(autoincrement())
+  uuid              String       @unique @default(uuid())
+  grnHeaderId       Int
+  lineNumber        Int
+  itemId            Int
+  itemName          String
+  receivedQty       Float
+  inspectedQty      Float
+  acceptedQty       Float        @default(0)
+  rejectedQty       Float        @default(0)
+  inspectionDate    DateTime     @default(now())
+  inspectorId       Int?
+  inspectorName     String?
+  result            String
+  remarks           String?
+  defectType        String?
+  defectDescription String?
+  actionTaken       String?      @default("NONE")
+  createdAt         DateTime     @default(now())
+  header            GoodsReceipt @relation(fields: [grnHeaderId], references: [id], onDelete: Cascade)
+  item              Item         @relation(fields: [itemId], references: [id])
+
+  @@index([grnHeaderId])
+  @@index([itemId])
+  @@index([result])
+  @@index([inspectionDate])
+}
+
+model PurchaseHistory {
+  id           Int      @id @default(autoincrement())
+  uuid         String   @unique @default(uuid())
+  companyId    Int
+  itemId       Int
+  vendorId     Int
+  purchaseDate DateTime @default(now())
+  poNumber     String?
+  grnNumber    String?
+  quantity     Float
+  rate         Float
+  amount       Float
+  taxAmount    Float    @default(0)
+  totalAmount  Float    @default(0)
+  createdAt    DateTime @default(now())
+  company      Company  @relation(fields: [companyId], references: [id])
+  item         Item     @relation(fields: [itemId], references: [id])
+  vendor       Vendor   @relation(fields: [vendorId], references: [id])
+
+  @@index([companyId])
+  @@index([itemId])
+  @@index([vendorId])
+  @@index([purchaseDate])
+}
+
+model PriceHistory {
+  id               Int      @id @default(autoincrement())
+  uuid             String   @unique @default(uuid())
+  companyId        Int
+  itemId           Int
+  vendorId         Int
+  effectiveDate    DateTime @default(now())
+  rate             Float
+  previousRate     Float?
+  variationPercent Float?
+  createdAt        DateTime @default(now())
+  company          Company  @relation(fields: [companyId], references: [id])
+  item             Item     @relation(fields: [itemId], references: [id])
+  vendor           Vendor   @relation(fields: [vendorId], references: [id])
+
+  @@index([companyId])
+  @@index([itemId])
+  @@index([vendorId])
+  @@index([effectiveDate])
+}
+
+model ServiceRequest {
+  id                   Int                  @id @default(autoincrement())
+  uuid                 String               @unique @default(uuid())
+  requestNumber        String               @unique
+  physicalDemandNo     String?
+  companyId            Int
+  financialYearId      Int
+  assetId              Int?
+  storeId              Int?
+  storeName            String?
+  roomId               Int?
+  locationName         String?
+  departmentId         Int?
+  departmentName       String?
+  dharmshalaName       String?
+  demandType           String               @default("GENERAL")
+  serviceType          String
+  priority             String               @default("MEDIUM")
+  issueDescription     String
+  requestedById        Int?
+  requestedByName      String
+  requestDate          DateTime             @default(now())
+  demandDate           DateTime?
+  requestingPerson     String?
+  mobileNo             String?
+  status               String               @default("DRAFT")
+  assignedToId         Int?
+  assignedToName       String?
+  workOrderId          Int?                 @unique
+  materialDemandStatus String?              @default("NONE")
+  issueSlipNumber      String?
+  responsiblePerson    String?
+  workType             String?
+  createdAt            DateTime             @default(now())
+  updatedAt            DateTime             @updatedAt
+  demandItems          MaterialDemandItem[]
+  consumptions         MaterialConsumption[]
+  consumptionItems     MaterialConsumptionItem[]
+  installations        MaterialInstallation[]
+  installationItems    MaterialInstallationItem[]
+  checklists           ServiceChecklist[]
+  company              Company              @relation(fields: [companyId], references: [id])
+  financialYear        FinancialYear        @relation(fields: [financialYearId], references: [id])
+  asset                AssetProfile?        @relation(fields: [assetId], references: [id])
+  workOrder            WorkOrder?           @relation("ServiceRequestWorkOrder", fields: [workOrderId], references: [id])
+
+  @@unique([companyId, requestNumber])
+  @@unique([companyId, physicalDemandNo])
+  @@index([companyId])
+  @@index([companyId, status])
+  @@index([requestNumber])
+  @@index([physicalDemandNo])
+  @@index([assetId])
+  @@index([workOrderId])
+  @@index([status])
+  @@index([priority])
+  @@index([serviceType])
+  @@index([requestDate])
+}
+
+model WorkOrder {
+  id                       Int                         @id @default(autoincrement())
+  uuid                     String                      @unique @default(uuid())
+  workOrderNumber          String                      @unique
+  companyId                Int
+  financialYearId          Int
+  assetId                  Int
+  engineerId               Int?
+  engineerName             String?
+  vendorId                 Int?
+  vendorName               String?
+  departmentId             Int?
+  expectedCompletion       DateTime?
+  completionDate           DateTime?
+  status                   String                      @default("DRAFT")
+  remarks                  String?
+  verificationStatus       String?
+  completionVerificationId Int?
+  createdAt                DateTime                    @default(now())
+  updatedAt                DateTime                    @updatedAt
+  documents                MaintenanceDocument[]
+  photos                   MaintenancePhoto[]
+  costs                    ServiceCost[]
+  serviceRequest           ServiceRequest?             @relation("ServiceRequestWorkOrder")
+  completionVerification   WorkCompletionVerification?
+  company                  Company                     @relation(fields: [companyId], references: [id])
+  financialYear            FinancialYear               @relation(fields: [financialYearId], references: [id])
+  asset                    AssetProfile                @relation(fields: [assetId], references: [id])
+  spareParts               WorkOrderSparePart[]
+
+  @@unique([companyId, workOrderNumber])
+  @@index([companyId])
+  @@index([companyId, status])
+  @@index([workOrderNumber])
+  @@index([assetId])
+  @@index([status])
+  @@index([engineerId])
+  @@index([vendorId])
+  @@index([departmentId])
+  @@index([completionDate])
+}
+
+model WorkOrderSparePart {
+  id                  Int       @id @default(autoincrement())
+  uuid                String    @unique @default(uuid())
+  workOrderId         Int
+  lineNumber          Int
+  itemId              Int
+  itemName            String
+  itemCode            String?
+  quantity            Float
+  unitName            String?
+  rate                Float     @default(0)
+  amount              Float     @default(0)
+  transactionHeaderId Int?
+  remarks             String?
+  createdAt           DateTime  @default(now())
+  workOrder           WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  item                Item      @relation(fields: [itemId], references: [id])
+
+  @@index([workOrderId])
+  @@index([itemId])
+}
+
+model MaintenanceHistory {
+  id           Int          @id @default(autoincrement())
+  uuid         String       @unique @default(uuid())
+  companyId    Int
+  assetId      Int
+  workOrderId  Int?
+  serviceDate  DateTime     @default(now())
+  serviceType  String
+  description  String
+  engineerName String?
+  vendorName   String?
+  partsUsed    String?
+  labourCost   Float        @default(0)
+  materialCost Float        @default(0)
+  vendorCost   Float        @default(0)
+  travelCost   Float        @default(0)
+  miscCost     Float        @default(0)
+  totalCost    Float        @default(0)
+  downtime     Float        @default(0)
+  remarks      String?
+  createdAt    DateTime     @default(now())
+  company      Company      @relation(fields: [companyId], references: [id])
+  asset        AssetProfile @relation(fields: [assetId], references: [id])
+
+  @@index([companyId])
+  @@index([assetId])
+  @@index([serviceDate])
+  @@index([serviceType])
+}
+
+model BreakdownHistory {
+  id                Int          @id @default(autoincrement())
+  uuid              String       @unique @default(uuid())
+  companyId         Int
+  assetId           Int
+  breakdownDate     DateTime     @default(now())
+  cause             String
+  resolution        String?
+  downtime          Float        @default(0)
+  responsiblePerson String?
+  sparePartsUsed    String?
+  cost              Float        @default(0)
+  remarks           String?
+  createdAt         DateTime     @default(now())
+  company           Company      @relation(fields: [companyId], references: [id])
+  asset             AssetProfile @relation(fields: [assetId], references: [id])
+
+  @@index([companyId])
+  @@index([assetId])
+  @@index([breakdownDate])
+}
+
+model AMCAgreement {
+  id              Int           @id @default(autoincrement())
+  uuid            String        @unique @default(uuid())
+  companyId       Int
+  assetId         Int
+  vendorId        Int
+  vendorName      String?
+  agreementNumber String?
+  startDate       DateTime
+  endDate         DateTime
+  coverage        String?
+  totalVisits     Int?
+  visitsUsed      Int?          @default(0)
+  totalCost       Float         @default(0)
+  paymentTerms    String?
+  status          String        @default("ACTIVE")
+  remarks         String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  company         Company       @relation(fields: [companyId], references: [id])
+  asset           AssetProfile  @relation(fields: [assetId], references: [id])
+  documents       AMCDocument[]
+
+  @@index([companyId])
+  @@index([assetId])
+  @@index([vendorId])
+  @@index([status])
+  @@index([endDate])
+}
+
+model AMCDocument {
+  id           Int          @id @default(autoincrement())
+  uuid         String       @unique @default(uuid())
+  amcId        Int
+  documentType String
+  fileName     String
+  filePath     String
+  fileSize     Int?
+  mimeType     String?
+  description  String?
+  uploadedBy   String?
+  createdAt    DateTime     @default(now())
+  amc          AMCAgreement @relation(fields: [amcId], references: [id], onDelete: Cascade)
+
+  @@index([amcId])
+}
+
+model WarrantyClaim {
+  id                 Int          @id @default(autoincrement())
+  uuid               String       @unique @default(uuid())
+  companyId          Int
+  assetId            Int
+  claimNumber        String       @unique
+  claimDate          DateTime     @default(now())
+  issueDescription   String
+  vendorResponse     String?
+  status             String       @default("SUBMITTED")
+  resolution         String?
+  replacementAssetId Int?
+  cost               Float        @default(0)
+  resolvedAt         DateTime?
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+  company            Company      @relation(fields: [companyId], references: [id])
+  asset              AssetProfile @relation(fields: [assetId], references: [id])
+
+  @@unique([companyId, claimNumber])
+  @@index([companyId])
+  @@index([assetId])
+  @@index([status])
+  @@index([claimDate])
+}
+
+model ServiceSchedule {
+  id              Int          @id @default(autoincrement())
+  uuid            String       @unique @default(uuid())
+  companyId       Int
+  assetId         Int
+  serviceType     String
+  frequency       String
+  customDays      Int?
+  nextDueDate     DateTime
+  lastServiceDate DateTime?
+  isActive        Boolean      @default(true)
+  remarks         String?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  company         Company      @relation(fields: [companyId], references: [id])
+  asset           AssetProfile @relation(fields: [assetId], references: [id])
+
+  @@index([companyId])
+  @@index([assetId])
+  @@index([nextDueDate])
+  @@index([isActive])
+}
+
+model ServiceChecklist {
+  id               Int            @id @default(autoincrement())
+  uuid             String         @unique @default(uuid())
+  serviceRequestId Int
+  lineNumber       Int
+  checkItem        String
+  isChecked        Boolean        @default(false)
+  remarks          String?
+  createdAt        DateTime       @default(now())
+  serviceRequest   ServiceRequest @relation(fields: [serviceRequestId], references: [id], onDelete: Cascade)
+
+  @@index([serviceRequestId])
+}
+
+model ServiceCost {
+  id            Int       @id @default(autoincrement())
+  uuid          String    @unique @default(uuid())
+  workOrderId   Int
+  costType      String
+  amount        Float     @default(0)
+  description   String?
+  invoiceNumber String?
+  createdAt     DateTime  @default(now())
+  workOrder     WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+
+  @@index([workOrderId])
+  @@index([costType])
+}
+
+model MaintenancePhoto {
+  id          Int       @id @default(autoincrement())
+  uuid        String    @unique @default(uuid())
+  workOrderId Int
+  photoType   String
+  fileName    String
+  filePath    String
+  fileSize    Int?
+  mimeType    String?
+  caption     String?
+  takenBy     String?
+  takenAt     DateTime  @default(now())
+  createdAt   DateTime  @default(now())
+  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+
+  @@index([workOrderId])
+  @@index([photoType])
+}
+
+model MaintenanceDocument {
+  id           Int       @id @default(autoincrement())
+  uuid         String    @unique @default(uuid())
+  workOrderId  Int
+  documentType String
+  fileName     String
+  filePath     String
+  fileSize     Int?
+  mimeType     String?
+  description  String?
+  uploadedBy   String?
+  createdAt    DateTime  @default(now())
+  workOrder    WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+
+  @@index([workOrderId])
+  @@index([documentType])
+}
+
+model Role {
+  id              Int              @id @default(autoincrement())
+  uuid            String           @unique @default(uuid())
+  companyId       Int
+  name            String
+  displayName     String
+  description     String?
+  isSystem        Boolean          @default(false)
+  isActive        Boolean          @default(true)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  company         Company          @relation(fields: [companyId], references: [id])
+  rolePermissions RolePermission[]
+  users           User[]
+
+  @@unique([companyId, name])
+  @@index([companyId])
+  @@index([isActive])
+}
+
+model Permission {
+  id              Int              @id @default(autoincrement())
+  uuid            String           @unique @default(uuid())
+  key             String           @unique
+  module          String
+  action          String
+  description     String?
+  isActive        Boolean          @default(true)
+  createdAt       DateTime         @default(now())
+  rolePermissions RolePermission[]
+
+  @@index([module])
+  @@index([action])
+}
+
+model RolePermission {
+  id           Int        @id @default(autoincrement())
+  roleId       Int
+  permissionId Int
+  createdAt    DateTime   @default(now())
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@index([roleId])
+  @@index([permissionId])
+}
+
+model Session {
+  id           Int       @id @default(autoincrement())
+  uuid         String    @unique @default(uuid())
+  userId       Int
+  token        String    @unique
+  ipAddress    String?
+  device       String?
+  loginAt      DateTime  @default(now())
+  lastActiveAt DateTime  @default(now())
+  logoutAt     DateTime?
+  isActive     Boolean   @default(true)
+  user         User      @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([token])
+  @@index([isActive])
+  @@index([lastActiveAt])
+}
+
+model PasswordPolicy {
+  id                     Int      @id @default(autoincrement())
+  companyId              Int      @unique
+  minPasswordLength      Int      @default(8)
+  requireUppercase       Boolean  @default(true)
+  requireLowercase       Boolean  @default(true)
+  requireNumbers         Boolean  @default(true)
+  requireSpecialChars    Boolean  @default(true)
+  maxAgeDays             Int?
+  maxFailedAttempts      Int      @default(5)
+  lockoutDurationMinutes Int      @default(30)
+  sessionTimeoutMinutes  Int      @default(480)
+  forceLogoutAllDevices  Boolean  @default(false)
+  passwordHistoryCount   Int      @default(3)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+  company                Company  @relation(fields: [companyId], references: [id])
+
+  @@index([companyId])
+}
+
+model MaterialDemandItem {
+  id                Int                @id @default(autoincrement())
+  uuid              String             @unique @default(uuid())
+  serviceRequestId  Int
+  lineNumber        Int
+  itemId            Int
+  itemName          String
+  itemCode          String?
+  unitName          String
+  quantityRequested Decimal
+  quantityIssued    Decimal            @default(0)
+  quantityReturned  Decimal            @default(0)
+  quantityDamaged   Decimal            @default(0)
+  quantityConsumed  Decimal            @default(0)
+  quantityInstalled Decimal            @default(0)
+  serialNumber      String?
+  responsiblePerson String?
+  workType          String?
+  storeId           Int?
+  locationId        Int?
+  locationName      String?
+  status            String             @default("PENDING")
+  remarks           String?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  item              Item               @relation(fields: [itemId], references: [id])
+  serviceRequest    ServiceRequest     @relation(fields: [serviceRequestId], references: [id])
+  location          Location?          @relation(fields: [locationId], references: [id])
+  allocations       DemandAllocation[]
+  consumptions      MaterialConsumptionItem[]
+  installations     MaterialInstallationItem[]
+
+  @@index([serviceRequestId])
+  @@index([itemId])
+  @@index([locationId])
+  @@index([status])
+}
+
+model WorkCompletionVerification {
+  id                     Int                     @id @default(autoincrement())
+  uuid                   String                  @unique @default(uuid())
+  verificationNumber     String                  @unique
+  workOrderId            Int                     @unique
+  companyId              Int
+  financialYearId        Int
+  verifiedDate           DateTime                @default(now())
+  completedDate          DateTime?
+  workDescription        String?
+  locationDetails        String?
+  departmentVerifiedBy   String?
+  departmentVerifiedRole String?
+  managerVerifiedBy      String?
+  managerVerifiedRole    String?
+  supervisorVerifiedBy   String?
+  supervisorVerifiedRole String?
+  verificationStatus     String                  @default("PENDING")
+  overallRemarks         String?
+  createdAt              DateTime                @default(now())
+  updatedAt              DateTime                @updatedAt
+  signatures             VerificationSignature[]
+  items                  WorkCompletionItem[]
+  financialYear          FinancialYear           @relation(fields: [financialYearId], references: [id])
+  company                Company                 @relation(fields: [companyId], references: [id])
+  workOrder              WorkOrder               @relation(fields: [workOrderId], references: [id])
+
+  @@unique([companyId, verificationNumber])
+  @@index([workOrderId])
+  @@index([companyId])
+  @@index([verificationStatus])
+}
+
+model WorkCompletionItem {
+  id                   Int                        @id @default(autoincrement())
+  uuid                 String                     @unique @default(uuid())
+  verificationId       Int
+  lineNumber           Int
+  itemId               Int
+  itemName             String
+  itemCode             String?
+  unitName             String
+  quantityIssued       Decimal
+  quantityInstalled    Decimal                    @default(0)
+  quantityReturned     Decimal                    @default(0)
+  quantityDamaged      Decimal                    @default(0)
+  quantityScrap        Decimal                    @default(0)
+  serialNumber         String?
+  isReplacement        Boolean                    @default(false)
+  oldItemDescription   String?
+  installationLocation String?
+  remarks              String?
+  createdAt            DateTime                   @default(now())
+  item                 Item                       @relation(fields: [itemId], references: [id])
+  verification         WorkCompletionVerification @relation(fields: [verificationId], references: [id])
+
+  @@index([verificationId])
+  @@index([itemId])
+}
+
+model VerificationSignature {
+  id             Int                        @id @default(autoincrement())
+  uuid           String                     @unique @default(uuid())
+  verificationId Int
+  signerRole     String
+  signerName     String
+  signedAt       DateTime                   @default(now())
+  signaturePath  String?
+  ipAddress      String?
+  createdAt      DateTime                   @default(now())
+  verification   WorkCompletionVerification @relation(fields: [verificationId], references: [id])
+
+  @@index([verificationId])
+  @@index([signerRole])
+}
+
+model DocumentAttachment {
+  id             Int      @id @default(autoincrement())
+  uuid           String   @unique @default(uuid())
+  sourceType     String
+  sourceId       Int
+  documentType   String
+  fileName       String
+  filePath       String
+  fileSize       Int?
+  mimeType       String?
+  description    String?
+  uploadedBy     String?
+  uploadedAt     DateTime @default(now())
+  isPhysicalCopy Boolean  @default(false)
+
+  @@index([sourceType, sourceId])
+  @@index([documentType])
+}
+
+model DemandAllocation {
+  id                    Int               @id @default(autoincrement())
+  uuid                  String            @unique @default(uuid())
+  materialDemandItemId  Int
+  transactionHeaderId   Int
+  quantityAllocated     Decimal
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+  materialDemandItem    MaterialDemandItem @relation(fields: [materialDemandItemId], references: [id])
+  transaction           TransactionHeader  @relation(fields: [transactionHeaderId], references: [id])
+
+  @@unique([materialDemandItemId, transactionHeaderId])
+  @@index([materialDemandItemId])
+  @@index([transactionHeaderId])
+}
+
+model MaterialConsumption {
+  id                      Int                @id @default(autoincrement())
+  uuid                    String             @unique @default(uuid())
+  consumptionNumber       String             @unique
+  companyId               Int
+  financialYearId         Int
+  storeId                 Int
+  locationId              Int?
+  locationName            String?
+  departmentId            Int?
+  dharmshalaName          String?
+  date                    DateTime
+  usedBy                  String?
+  issuedBy                String?
+  remarks                 String?
+  status                  String             @default("DRAFT")
+  transactionHeaderId     Int?
+  serviceRequestId        Int?
+  createdAt               DateTime           @default(now())
+  updatedAt               DateTime           @updatedAt
+  company                 Company            @relation(fields: [companyId], references: [id])
+  financialYear           FinancialYear      @relation(fields: [financialYearId], references: [id])
+  store                   Store              @relation(fields: [storeId], references: [id])
+  location                Location?          @relation(fields: [locationId], references: [id])
+  serviceRequest          ServiceRequest?    @relation(fields: [serviceRequestId], references: [id])
+  transaction             TransactionHeader? @relation(fields: [transactionHeaderId], references: [id])
+  items                   MaterialConsumptionItem[]
+
+  @@index([companyId])
+  @@index([companyId, financialYearId, storeId])
+  @@index([financialYearId])
+  @@index([storeId])
+  @@index([locationId])
+  @@index([serviceRequestId])
+  @@index([transactionHeaderId])
+  @@index([consumptionNumber])
+}
+
+model MaterialConsumptionItem {
+  id                      Int                @id @default(autoincrement())
+  uuid                    String             @unique @default(uuid())
+  materialConsumptionId   Int
+  itemId                  Int
+  itemName                String
+  itemCode                String?
+  unitName                String?
+  quantityUsed            Decimal
+  condition               String             @default("GOOD")
+  remarks                 String?
+  serviceRequestId        Int?
+  materialDemandItemId    Int?
+  transactionHeaderId     Int?
+  createdAt               DateTime           @default(now())
+  updatedAt               DateTime           @updatedAt
+  materialConsumption     MaterialConsumption @relation(fields: [materialConsumptionId], references: [id])
+  item                    Item               @relation(fields: [itemId], references: [id])
+  serviceRequest          ServiceRequest?    @relation(fields: [serviceRequestId], references: [id])
+  materialDemandItem      MaterialDemandItem? @relation(fields: [materialDemandItemId], references: [id])
+  transaction             TransactionHeader? @relation(fields: [transactionHeaderId], references: [id])
+
+  @@index([materialConsumptionId])
+  @@index([itemId])
+  @@index([serviceRequestId])
+  @@index([materialDemandItemId])
+  @@index([transactionHeaderId])
+}
+
+model MaterialInstallation {
+  id                Int                    @id @default(autoincrement())
+  uuid              String                 @unique @default(uuid())
+  installationNumber String                @unique
+  companyId         Int
+  financialYearId   Int
+  storeId           Int
+  locationId        Int?
+  locationName      String?
+  departmentId      Int?
+  departmentName    String?
+  dharmshalaName    String?
+  date              DateTime
+  installedBy       String?
+  approvedBy        String?
+  remarks           String?
+  status            String                 @default("POSTED")
+  serviceRequestId  Int?
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
+  company           Company                @relation(fields: [companyId], references: [id])
+  financialYear     FinancialYear          @relation(fields: [financialYearId], references: [id])
+  store             Store                  @relation(fields: [storeId], references: [id])
+  location          Location?              @relation(fields: [locationId], references: [id])
+  serviceRequest    ServiceRequest?        @relation(fields: [serviceRequestId], references: [id])
+  items             MaterialInstallationItem[]
+
+  @@index([companyId])
+  @@index([companyId, financialYearId, storeId])
+  @@index([financialYearId])
+  @@index([storeId])
+  @@index([serviceRequestId])
+}
+
+model MaterialInstallationItem {
+  id                        Int                 @id @default(autoincrement())
+  uuid                      String              @unique @default(uuid())
+  materialInstallationId    Int
+  itemId                    Int
+  itemName                  String
+  itemCode                  String?
+  unitName                  String?
+  quantityInstalled         Decimal
+  condition                 String              @default("GOOD")
+  remarks                   String?
+  serviceRequestId          Int?
+  materialDemandItemId      Int?
+  transactionHeaderId       Int?
+  createdAt                 DateTime            @default(now())
+  updatedAt                 DateTime            @updatedAt
+  materialInstallation      MaterialInstallation @relation(fields: [materialInstallationId], references: [id])
+  item                      Item                @relation(fields: [itemId], references: [id])
+  serviceRequest            ServiceRequest?     @relation(fields: [serviceRequestId], references: [id])
+  materialDemandItem        MaterialDemandItem? @relation(fields: [materialDemandItemId], references: [id])
+  transaction               TransactionHeader?  @relation(fields: [transactionHeaderId], references: [id])
+
+  @@index([materialInstallationId])
+  @@index([itemId])
+  @@index([serviceRequestId])
+  @@index([materialDemandItemId])
+  @@index([transactionHeaderId])
+}
+
+model UserPreference {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  key       String
+  value     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, key])
+  @@index([userId])
+}
+
+model CurrentStockBalance {
+  id             Int      @id @default(autoincrement())
+  companyId      Int
+  financialYearId Int
+  storeId        Int
+  itemId         Int
+  availableQty   Decimal  @default(0)
+  installedQty   Decimal  @default(0)
+  damagedQty     Decimal  @default(0)
+  repairQty      Decimal  @default(0)
+  scrapQty       Decimal  @default(0)
+  totalValue     Decimal  @default(0)
+  updatedAt      DateTime @default(now())
+
+  @@unique([companyId, financialYearId, storeId, itemId])
+  @@index([companyId, financialYearId, storeId])
+  @@index([companyId, financialYearId, itemId])
+}
+
+model StockMonthlySummary {
+  id             Int      @id @default(autoincrement())
+  companyId      Int
+  financialYearId Int
+  yearMonth      String
+  quantityIn     Decimal  @default(0)
+  quantityOut    Decimal  @default(0)
+
+  @@unique([companyId, financialYearId, yearMonth])
+  @@index([companyId, financialYearId])
 }

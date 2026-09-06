@@ -1,81 +1,95 @@
-import { PrismaClient, Prisma } from '@prisma/client';
-import { validateSufficientStock, getLatestBalance, recalculateBalancesAfterInsert } from './stockValidation.service';
+import { PrismaClient } from '@prisma/client';
+import { TransactionEngine, CreateTransactionInput, TransactionItem } from './transactionEngine.service';
+import { StockEngine } from './stockEngine.service';
 
 export class StockAdjustmentService {
-  constructor(private prisma: PrismaClient) {}
+  private transactionEngine: TransactionEngine;
+  private stockEngine: StockEngine;
 
-  /**
-   * FIX #2: Balance check + write are now atomic inside $transaction.
-   * FIX #4: Passes departmentId/locationId to validation for scoped stock checks.
-   * FIX #3: Calls recalculateBalancesAfterInsert for backdated adjustments.
-   */
+  constructor(private prisma: PrismaClient) {
+    this.transactionEngine = new TransactionEngine(prisma);
+    this.stockEngine = new StockEngine(prisma);
+  }
+
   async create(data: {
-    companyId: number; financialYearId: number; date: Date;
-    itemId: number; adjustmentType: string; quantity: number;
-    departmentId?: number; locationId?: number;
-    reason: string; adjustedBy: string; approvedBy?: string; remarks?: string;
+    companyId: number;
+    financialYearId: number;
+    transactionDate: Date;
+    itemId: number;
+    adjustmentType: 'INCREASE' | 'DECREASE';
+    quantity: number;
+    rate?: number;
+    unitId?: number;
+    fromStoreId?: number;
+    toStoreId?: number;
+    departmentId?: number;
+    reasonId?: number;
+    referenceNo?: string;
+    purpose?: string;
+    remarks?: string;
+    createdBy: string;
   }) {
-    return this.prisma.$transaction(async (tx) => {
-      const isIncrease = data.adjustmentType === 'INCREASE';
-      const departmentId = data.departmentId || null;
-      const locationId = data.locationId || null;
+    const isIncrease = data.adjustmentType === 'INCREASE';
 
-      if (!isIncrease) {
-        const validation = await validateSufficientStock(tx, data.companyId, data.financialYearId, data.itemId, departmentId, locationId, data.quantity);
-        if (!validation.sufficient) {
-          throw new Error(`Insufficient stock for adjustment. Available: ${validation.available}, Decrease: ${data.quantity}`);
-        }
-      }
-
-      const prevBalance = await getLatestBalance(tx, data.companyId, data.financialYearId, data.itemId, departmentId, locationId);
-      const newBalance = isIncrease ? prevBalance + data.quantity : prevBalance - data.quantity;
-
-      const adjustment = await tx.stockAdjustment.create({
-        data: {
-          companyId: data.companyId, financialYearId: data.financialYearId, date: data.date,
-          itemId: data.itemId, adjustmentType: data.adjustmentType, quantity: data.quantity,
-          reason: data.reason, adjustedBy: data.adjustedBy, approvedBy: data.approvedBy, remarks: data.remarks,
+    const input: CreateTransactionInput = {
+      companyId: data.companyId,
+      financialYearId: data.financialYearId,
+      voucherType: 'AD',
+      transactionDate: data.transactionDate,
+      fromStoreId: isIncrease ? undefined : data.fromStoreId,
+      toStoreId: isIncrease ? data.toStoreId : undefined,
+      departmentId: data.departmentId,
+      reasonId: data.reasonId,
+      referenceNo: data.referenceNo,
+      purpose: data.purpose,
+      remarks: data.remarks,
+      createdBy: data.createdBy,
+      items: [
+        {
+          itemId: data.itemId,
+          quantity: data.quantity,
+          rate: data.rate,
+          condition: 'GOOD',
+          unitId: data.unitId,
         },
-      });
+      ],
+    };
 
-      await tx.stockTransaction.create({
-        data: {
-          companyId: data.companyId, financialYearId: data.financialYearId, itemId: data.itemId,
-          departmentId,
-          locationId,
-          transactionType: isIncrease ? 'ADJUSTMENT_IN' : 'ADJUSTMENT_OUT',
-          transactionDate: data.date,
-          quantityIn: isIncrease ? data.quantity : new Prisma.Decimal(0),
-          quantityOut: isIncrease ? new Prisma.Decimal(0) : data.quantity,
-          balanceQty: new Prisma.Decimal(newBalance),
-          referenceType: 'StockAdjustment', referenceId: adjustment.id,
-          referenceNo: `ADJ-${adjustment.id}`,
-          remarks: `Adjustment: ${data.reason}`, createdBy: data.adjustedBy,
-        },
-      });
-
-      await recalculateBalancesAfterInsert(tx, data.companyId, data.financialYearId, data.itemId, departmentId, locationId, data.date);
-
-      await tx.auditLog.create({
-        data: {
-          companyId: data.companyId, action: 'CREATE', tableName: 'StockAdjustment',
-          recordId: adjustment.id, recordUuid: adjustment.uuid,
-          description: `Stock adjustment: ${data.adjustmentType} ${data.quantity} of item ${data.itemId}`,
-          oldValues: JSON.stringify({ departmentId, locationId, prevBalance }),
-          newValues: JSON.stringify({ ...data, newBalance }),
-        },
-      });
-
-      return adjustment;
-    });
+    return this.transactionEngine.createTransaction(input);
   }
 
   async findAll(companyId: number, financialYearId: number, page = 1, pageSize = 50) {
-    const where = { companyId, financialYearId };
+    const where = { companyId, financialYearId, voucherType: 'AD' as const };
+
     const [data, total] = await Promise.all([
-      this.prisma.stockAdjustment.findMany({ where, include: { item: true }, skip: (page - 1) * pageSize, take: pageSize, orderBy: { date: 'desc' } }),
-      this.prisma.stockAdjustment.count({ where }),
+      this.prisma.transactionHeader.findMany({
+        where,
+        include: {
+          details: {
+            include: { item: true },
+          },
+        },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        orderBy: { transactionDate: 'desc' },
+      }),
+      this.prisma.transactionHeader.count({ where }),
     ]);
+
     return { data, total, page, pageSize, totalPages: Math.ceil(total / pageSize) };
+  }
+
+  async findById(id: number, companyId: number) {
+    return this.prisma.transactionHeader.findFirst({
+      where: { id, companyId, voucherType: 'AD' },
+      include: {
+        details: {
+          include: { item: true },
+        },
+        fromStore: true,
+        toStore: true,
+        reason: true,
+      },
+    });
   }
 }

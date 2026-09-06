@@ -1,4 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
 import {
   Box, Typography, Stack, TextField, Button, Switch, FormControlLabel,
   Divider, Alert, alpha, useTheme, Card, CardContent, CircularProgress, Chip, LinearProgress,
@@ -7,13 +10,33 @@ import { Save, Palette, TextFields, Storage, SystemUpdateAlt, Update, FolderOpen
 import { useThemeMode } from '../../context/ThemeContext';
 import PageHeader from '../../components/PageHeader';
 import toast from 'react-hot-toast';
+import { getErrorMessage } from '../../utils/errorUtils';
+
+const settingsSchema = z.object({
+  companyName: z.string().min(1, 'Organization name is required'),
+  headerText: z.string().min(1, 'Header text is required'),
+});
+
+type SettingsFormData = z.infer<typeof settingsSchema>;
 
 export default function SettingsPage() {
   const { darkMode, toggleDarkMode } = useThemeMode();
   const theme = useTheme();
-  const [companyName, setCompanyName] = useState('Digamber Jain Atishay Kshetra');
-  const [headerText, setHeaderText] = useState('SHRI MAHAVEERJI');
   const [saved, setSaved] = useState(false);
+  const savedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Cleanup saved timer on unmount
+  useEffect(() => {
+    return () => {
+      if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
+    };
+  }, []);
+
+  const { register, handleSubmit, reset, formState: { errors } } = useForm<SettingsFormData>({
+    resolver: zodResolver(settingsSchema),
+    mode: 'onChange',
+    defaultValues: { companyName: 'Digamber Jain Atishay Kshetra', headerText: 'SHRI MAHAVEERJI' },
+  });
 
   // Update system state
   const [appVersion, setAppVersion] = useState('');
@@ -28,13 +51,13 @@ export default function SettingsPage() {
   const [userRole, setUserRole] = useState('');
 
   useEffect(() => {
-    window.electronAPI.getVersion().then(setAppVersion);
-    window.electronAPI.getUpdateInfo().then(setUpdateInfo);
-    window.electronAPI.getDbPath().then(setDbPath);
-    window.electronAPI.getBackupLocation().then(setBackupLocation);
-    window.electronAPI.getCurrentUser().then((user) => {
+    window.electronAPI.getVersion().then(setAppVersion).catch(() => {});
+    window.electronAPI.getUpdateInfo().then(setUpdateInfo).catch(() => {});
+    window.electronAPI.getDbPath().then(setDbPath).catch(() => {});
+    window.electronAPI.getBackupLocation().then(setBackupLocation).catch(() => {});
+    window.electronAPI.getCurrentUser().then((user: { role: string } | null) => {
       if (user) setUserRole(user.role);
-    });
+    }).catch(() => {});
 
     const handleUpdateStatus = (_event: any, data: any) => {
       setUpdateStatus(data.status);
@@ -71,23 +94,26 @@ export default function SettingsPage() {
     try {
       await window.electronAPI.checkForUpdates();
     } catch (err: any) {
-      toast.error('Failed to check for updates');
+      toast.error(getErrorMessage(err, 'Failed to check for updates'));
     }
     setCheckingUpdate(false);
   };
 
-  const handleSave = () => {
-    localStorage.setItem('settings', JSON.stringify({ companyName, headerText }));
+  const onSave = (data: SettingsFormData) => {
+    localStorage.setItem('settings', JSON.stringify(data));
     setSaved(true);
-    setTimeout(() => setSaved(false), 3000);
+    if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
+    savedTimerRef.current = setTimeout(() => setSaved(false), 3000);
   };
 
   useEffect(() => {
     const settings = localStorage.getItem('settings');
     if (settings) {
       const parsed = JSON.parse(settings);
-      setCompanyName(parsed.companyName || '');
-      setHeaderText(parsed.headerText || '');
+      reset({
+        companyName: parsed.companyName || '',
+        headerText: parsed.headerText || '',
+      });
     }
   }, []);
 
@@ -219,17 +245,19 @@ export default function SettingsPage() {
             <Stack spacing={2.5}>
               <TextField
                 label="Trust/Organization Name"
-                value={companyName}
-                onChange={(e) => setCompanyName(e.target.value)}
+                {...register('companyName')}
                 fullWidth
                 size="small"
+                error={!!errors.companyName}
+                helperText={errors.companyName?.message}
               />
               <TextField
                 label="Header Text (e.g. SHRI MAHAVEERJI)"
-                value={headerText}
-                onChange={(e) => setHeaderText(e.target.value)}
+                {...register('headerText')}
                 fullWidth
                 size="small"
+                error={!!errors.headerText}
+                helperText={errors.headerText?.message}
               />
             </Stack>
           </CardContent>
@@ -292,9 +320,13 @@ export default function SettingsPage() {
                         });
                         if (!result.canceled && result.filePaths?.[0]) {
                           const newPath = result.filePaths[0];
-                          await window.electronAPI.changeBackupLocation(newPath);
-                          setBackupLocation(newPath);
-                          toast.success('Backup location updated!');
+                          try {
+                            await window.electronAPI.changeBackupLocation(newPath);
+                            setBackupLocation(newPath);
+                            toast.success('Backup location updated!');
+                          } catch (err) {
+                            toast.error(getErrorMessage(err, 'Failed to change backup location'));
+                          }
                         }
                       }}
                     >
@@ -314,7 +346,7 @@ export default function SettingsPage() {
       </Box>
 
       <Box sx={{ mt: 3 }}>
-        <Button variant="contained" startIcon={<Save />} onClick={handleSave} size="large">
+        <Button variant="contained" startIcon={<Save />} onClick={handleSubmit(onSave)} size="large">
           Save Settings
         </Button>
       </Box>

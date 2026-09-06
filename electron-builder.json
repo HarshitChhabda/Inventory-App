@@ -2,28 +2,28 @@
   "appId": "com.mahaveerji.inventory",
   "productName": "Mahaveerji Inventory",
   "directories": {
-    "output": "dist",
+    "output": "release-build",
     "buildResources": "build"
   },
   "files": [
     "dist/**/*",
     "dist-electron/**/*",
-    "!node_modules/.prisma/client/libquery_engine-*",
     "node_modules/.prisma/**/*",
     "node_modules/@prisma/client/**/*"
   ],
+  "asar": true,
   "asarUnpack": [
     "**/*.node"
   ],
   "extraResources": [
     {
-      "from": "node_modules/.prisma/client/",
-      "to": "node_modules/.prisma/client/",
+      "from": "node_modules/.prisma",
+      "to": "node_modules/.prisma",
       "filter": ["**/*"]
     },
     {
-      "from": "node_modules/@prisma/client/",
-      "to": "node_modules/@prisma/client/",
+      "from": "node_modules/@prisma/client",
+      "to": "node_modules/@prisma/client",
       "filter": ["**/*"]
     },
     {
@@ -31,32 +31,63 @@
       "to": "prisma/dev.db"
     },
     {
-      "from": "prisma/migrations/",
-      "to": "prisma/migrations/",
-      "filter": ["**/*"]
-    },
-    {
       "from": "prisma/schema.prisma",
       "to": "prisma/schema.prisma"
+    },
+    {
+      "from": "prisma/migrations",
+      "to": "prisma/migrations",
+      "filter": ["**/*"]
     }
   ],
+  "publish": {
+    "provider": "github",
+    "owner": "HarshitChhabda",
+    "repo": "Inventory-App",
+    "releaseType": "release"
+  },
   "win": {
     "target": [
       {
         "target": "nsis",
-        "arch": [
-          "x64"
-        ]
+        "arch": ["x64"]
       }
     ],
     "icon": "build/icon.ico",
-    "artifactName": "${productName}-${version}.${ext}"
+    "artifactName": "${productName}-${version}-setup.${ext}"
   },
   "nsis": {
     "oneClick": false,
+    "perMachine": false,
     "allowToChangeInstallationDirectory": true,
     "createDesktopShortcut": true,
     "createStartMenuShortcut": true,
-    "shortcutName": "Mahaveerji Inventory"
+    "shortcutName": "Mahaveerji Inventory",
+    "installerIcon": "build/icon.ico",
+    "uninstallerIcon": "build/icon.ico",
+    "installerHeaderIcon": "build/icon.ico",
+    "deleteAppDataOnUninstall": false,
+    "allowElevation": true,
+    "runAfterFinish": true
+  },
+  "mac": {
+    "target": [
+      {
+        "target": "dmg",
+        "arch": ["x64", "arm64"]
+      }
+    ],
+    "icon": "build/icon.icns",
+    "category": "public.app-category.business"
+  },
+  "linux": {
+    "target": [
+      {
+        "target": "AppImage",
+        "arch": ["x64"]
+      }
+    ],
+    "icon": "build/icon.png",
+    "category": "Office"
   }
 }

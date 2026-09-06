@@ -6,7 +6,6 @@ import toast from 'react-hot-toast';
 
 export const PERMISSION_MAP: Record<string, string> = {
   '/masters/items': 'manage_masters',
-  '/masters/categories': 'manage_masters',
   '/masters/units': 'manage_masters',
   '/masters/vendors': 'manage_masters',
   '/masters/departments': 'manage_masters',

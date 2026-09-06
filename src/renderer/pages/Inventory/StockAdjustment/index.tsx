@@ -1,24 +1,50 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState } from 'react';
+import { useForm, Controller } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
 import {
   Box, Typography, Button, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, Paper, Stack, TextField, TablePagination,
-  Dialog, DialogTitle, DialogContent, DialogActions, FormControl,
-  InputLabel, Select, MenuItem, Autocomplete, Chip, alpha, useTheme,
+  FormControl, InputLabel, Select, MenuItem, Autocomplete, Chip, alpha, useTheme,
+  CircularProgress, Tooltip, IconButton,
 } from '@mui/material';
-import { Add, Search, Tune } from '@mui/icons-material';
+import { Add, Search, Tune, ArrowBack } from '@mui/icons-material';
 import toast from 'react-hot-toast';
+import { getErrorMessage } from '../../../utils/errorUtils';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
+import { TableSkeleton } from '../../../components/LoadingSkeleton';
 import { useCompany } from '../../../context/CompanyContext';
 import PageHeader from '../../../components/PageHeader';
+import EnterpriseDialog from '../../../components/EnterpriseDialog';
+import FormSection from '../../../components/FormSection';
 import EmptyState from '../../../components/EmptyState';
 import ImportExportButtons from '../../../components/ImportExportButtons';
+import { GuideButton } from '../../../components/GuideSystem';
+import ImportProgressDialog, { getInitialProgress, ImportProgress } from '../../../components/ImportProgressDialog';
 import DatePickerField from '../../../components/DatePickerField';
-import { formatDateDDMMYYYY, parseDateDDMMYYYY, todayISO } from '../../../utils/dateUtils';
+import { formatDateDDMMYYYY, normalizeDate, todayISO } from '../../../utils/dateUtils';
+import { useUnsavedChangesWarning, suppressUnsavedWarning } from '../../../hooks/useUnsavedChangesWarning';
+
+const adjustmentSchema = z.object({
+  itemId: z.number().min(1, 'Item is required'),
+  date: z.string().min(1, 'Date is required'),
+  adjustmentType: z.string().min(1),
+  quantity: z.number().min(0.01, 'Quantity must be positive'),
+  departmentId: z.number().nullable(),
+  reason: z.string().min(1, 'Reason is required'),
+  adjustedBy: z.string().min(1, 'Adjusted by is required'),
+  approvedBy: z.string(),
+  remarks: z.string(),
+});
+type AdjustmentFormData = z.infer<typeof adjustmentSchema>;
 
 const AdjustmentsTable = React.memo(function AdjustmentsTable({
   adjustments,
+  isLoading,
 }: {
   adjustments: any;
+  isLoading?: boolean;
 }) {
   return (
     <TableContainer component={Paper} sx={{ border: '1px solid', borderColor: 'divider' }}>
@@ -34,21 +60,29 @@ const AdjustmentsTable = React.memo(function AdjustmentsTable({
           </TableRow>
         </TableHead>
         <TableBody>
-          {adjustments?.data?.map((adj: any) => (
+          {isLoading ? (
+            <TableRow>
+              <TableCell colSpan={6} sx={{ p: 0, border: 'none' }}>
+                <Box sx={{ py: 2 }}>
+                  <TableSkeleton rows={5} columns={5} />
+                </Box>
+              </TableCell>
+            </TableRow>
+          ) : adjustments?.data?.map((adj: any) => (
             <TableRow key={adj.id} hover>
-              <TableCell>{formatDateDDMMYYYY(adj.date)}</TableCell>
-              <TableCell>{adj.item?.itemName}</TableCell>
+              <TableCell>{formatDateDDMMYYYY(adj.transactionDate || adj.createdAt)}</TableCell>
+              <TableCell>{adj.details?.[0]?.item?.itemName}</TableCell>
               <TableCell>
                 <Chip
-                  label={adj.adjustmentType}
+                  label={adj.remarks?.includes('INCREASE') ? 'INCREASE' : 'DECREASE'}
                   size="small"
-                  color={adj.adjustmentType === 'INCREASE' ? 'success' : 'error'}
+                  color={adj.remarks?.includes('INCREASE') ? 'success' : 'error'}
                   variant="outlined"
                 />
               </TableCell>
-              <TableCell><Typography fontWeight={600}>{adj.quantity}</Typography></TableCell>
-              <TableCell>{adj.reason}</TableCell>
-              <TableCell>{adj.adjustedBy}</TableCell>
+              <TableCell><Typography fontWeight={600}>{adj.details?.[0]?.quantity}</Typography></TableCell>
+              <TableCell>{adj.remarks?.split('): ')[1]?.split('.')[0] || adj.remarks || ''}</TableCell>
+              <TableCell>{adj.createdBy}</TableCell>
             </TableRow>
           ))}
           {(!adjustments?.data || adjustments.data.length === 0) && (
@@ -66,84 +100,119 @@ const AdjustmentsTable = React.memo(function AdjustmentsTable({
 
 const AdjustmentDialog = React.memo(function AdjustmentDialog({
   open,
-  formData,
   items,
   departments,
-  onFormChange,
   onClose,
   onSave,
   saving,
 }: {
   open: boolean;
-  formData: any;
   items: any[];
   departments: any[];
-  onFormChange: (data: any) => void;
   onClose: () => void;
-  onSave: () => void;
+  onSave: (data: AdjustmentFormData) => void;
   saving: boolean;
 }) {
+  const { control, register, handleSubmit, reset, formState: { isValid, isDirty } } = useForm<AdjustmentFormData>({
+    resolver: zodResolver(adjustmentSchema),
+    defaultValues: { itemId: 0, date: todayISO(), adjustmentType: 'INCREASE', quantity: 1, departmentId: null, reason: '', adjustedBy: '', approvedBy: '', remarks: '' },
+  });
+
+  useUnsavedChangesWarning({ isDirty });
+
+  React.useEffect(() => {
+    if (open) {
+      reset({ itemId: 0, date: todayISO(), adjustmentType: 'INCREASE', quantity: 1, departmentId: null, reason: '', adjustedBy: '', approvedBy: '', remarks: '' });
+    }
+  }, [open, reset]);
+
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth PaperProps={{ sx: { width: '100%', maxWidth: 520 } }}>
-      <DialogTitle>New Stock Adjustment</DialogTitle>
-      <DialogContent sx={{ minHeight: 320 }}>
-        <Stack spacing={2} sx={{ mt: 1 }}>
-          <Autocomplete options={items || []} getOptionLabel={(o: any) => `${o.itemCode} - ${o.itemName}`}
-            onChange={(_, v: any) => onFormChange({ ...formData, itemId: v?.id || 0 })}
-            renderInput={(params) => <TextField {...params} label="Item" size="small" />} />
-          <DatePickerField label="Date" value={formData.date} onChange={(val) => onFormChange({ ...formData, date: val })} size="small" />
-          <FormControl fullWidth size="small">
-            <InputLabel>Adjustment Type</InputLabel>
-            <Select value={formData.adjustmentType} label="Adjustment Type" onChange={(e) => onFormChange({ ...formData, adjustmentType: e.target.value })}>
-              <MenuItem value="INCREASE">INCREASE (Add Stock)</MenuItem>
-              <MenuItem value="DECREASE">DECREASE (Remove Stock)</MenuItem>
-            </Select>
-          </FormControl>
-          <TextField label="Quantity" type="number" value={formData.quantity} onChange={(e) => onFormChange({ ...formData, quantity: Number(e.target.value) })} inputProps={{ min: 0.01 }} size="small" />
-          <FormControl fullWidth size="small">
-            <InputLabel>Department (Optional)</InputLabel>
-            <Select value={formData.departmentId || ''} label="Department (Optional)" onChange={(e) => onFormChange({ ...formData, departmentId: e.target.value ? Number(e.target.value) : null })}>
-              <MenuItem value=""><em>None (Global)</em></MenuItem>
-              {departments?.map((d: any) => <MenuItem key={d.id} value={d.id}>{d.name}</MenuItem>)}
-            </Select>
-          </FormControl>
-          <FormControl fullWidth size="small">
-            <InputLabel>Reason</InputLabel>
-            <Select value={formData.reason} label="Reason" onChange={(e) => onFormChange({ ...formData, reason: e.target.value })}>
-              <MenuItem value="Physical Verification">Physical Verification</MenuItem>
-              <MenuItem value="Correction">Correction</MenuItem>
-              <MenuItem value="Damage Write-off">Damage Write-off</MenuItem>
-              <MenuItem value="Other">Other</MenuItem>
-            </Select>
-          </FormControl>
-          <TextField label="Adjusted By" value={formData.adjustedBy} onChange={(e) => onFormChange({ ...formData, adjustedBy: e.target.value })} size="small" />
-          <TextField label="Approved By" value={formData.approvedBy} onChange={(e) => onFormChange({ ...formData, approvedBy: e.target.value })} size="small" />
-          <TextField label="Remarks" value={formData.remarks} onChange={(e) => onFormChange({ ...formData, remarks: e.target.value })} multiline rows={2} size="small" />
-        </Stack>
-      </DialogContent>
-      <DialogActions sx={{ px: 3, pb: 2 }}>
-        <Button onClick={onClose}>Cancel</Button>
-        <Button variant="contained" onClick={onSave} disabled={!formData.itemId || !formData.adjustedBy || !formData.reason || saving}>
-          Create
-        </Button>
-      </DialogActions>
-    </Dialog>
+    <EnterpriseDialog
+      open={open}
+      onClose={onClose}
+      title="New Stock Adjustment"
+      icon={<Tune />}
+      maxWidth="sm"
+      actions={
+        <>
+          <Button onClick={onClose}>Cancel</Button>
+          <Button variant="contained" onClick={handleSubmit((data) => onSave(data))} disabled={!isValid || saving} startIcon={saving ? <CircularProgress size={16} color="inherit" /> : undefined}>
+            {saving ? 'Creating...' : 'Create'}
+          </Button>
+        </>
+      }
+    >
+      <form id="stock-adjustment-form">
+        <FormSection title="Item & Date" subtitle="Select item and adjustment date">
+          <Stack spacing={2.5}>
+            <Controller name="itemId" control={control} render={({ field }) => (
+              <Autocomplete options={items || []} getOptionLabel={(o: any) => `${o.itemCode} - ${o.itemName}`}
+                value={items?.find((i: any) => i.id === field.value) || null}
+                onChange={(_, v: any) => field.onChange(v?.id || 0)}
+                renderInput={(params) => <TextField {...params} label="Item" size="small" />} />
+            )} />
+            <Controller name="date" control={control} render={({ field }) => (
+              <DatePickerField label="Date" value={field.value} onChange={field.onChange} size="small" />
+            )} />
+          </Stack>
+        </FormSection>
+        <FormSection title="Adjustment Details" subtitle="Type, quantity, and reason">
+          <Stack spacing={2.5}>
+            <Controller name="adjustmentType" control={control} render={({ field }) => (
+              <FormControl fullWidth size="small">
+                <InputLabel>Adjustment Type</InputLabel>
+                <Select {...field} label="Adjustment Type" MenuProps={{ PaperProps: { sx: { maxHeight: 300 } } }}>
+                  <MenuItem value="INCREASE">INCREASE (Add Stock)</MenuItem>
+                  <MenuItem value="DECREASE">DECREASE (Remove Stock)</MenuItem>
+                </Select>
+              </FormControl>
+            )} />
+            <TextField label="Quantity" type="number" {...register('quantity', { valueAsNumber: true })} inputProps={{ min: 0.01 }} size="small" />
+            <Controller name="departmentId" control={control} render={({ field }) => (
+              <FormControl fullWidth size="small">
+                <InputLabel>Department (Optional)</InputLabel>
+                <Select {...field} value={field.value ?? ''} label="Department (Optional)" onChange={(e) => field.onChange(e.target.value ? Number(e.target.value) : null)} MenuProps={{ PaperProps: { sx: { maxHeight: 300 } } }}>
+                  <MenuItem value=""><em>None (Global)</em></MenuItem>
+                  {departments?.map((d: any) => <MenuItem key={d.id} value={d.id}>{d.name}</MenuItem>)}
+                </Select>
+              </FormControl>
+            )} />
+            <Controller name="reason" control={control} render={({ field }) => (
+              <FormControl fullWidth size="small">
+                <InputLabel>Reason</InputLabel>
+                <Select {...field} label="Reason" MenuProps={{ PaperProps: { sx: { maxHeight: 300 } } }}>
+                  <MenuItem value="Physical Verification">Physical Verification</MenuItem>
+                  <MenuItem value="Correction">Correction</MenuItem>
+                  <MenuItem value="Damage Write-off">Damage Write-off</MenuItem>
+                  <MenuItem value="Other">Other</MenuItem>
+                </Select>
+              </FormControl>
+            )} />
+          </Stack>
+        </FormSection>
+        <FormSection title="Approval & Notes" divider={false}>
+          <Stack spacing={2.5}>
+            <TextField label="Adjusted By" {...register('adjustedBy')} size="small" />
+            <TextField label="Approved By" {...register('approvedBy')} size="small" />
+            <TextField label="Remarks" {...register('remarks')} multiline rows={2} size="small" />
+          </Stack>
+        </FormSection>
+      </form>
+    </EnterpriseDialog>
   );
 });
 
 export default function StockAdjustmentPage() {
   const { company, financialYear } = useCompany();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(50);
-  const [formData, setFormData] = useState({
-    itemId: 0, departmentId: null as number | null, date: todayISO(),
-    adjustmentType: 'INCREASE', quantity: 1, reason: '', adjustedBy: '', approvedBy: '', remarks: '',
-  });
+  const [importProgress, setImportProgress] = useState<ImportProgress>(getInitialProgress);
 
   const exportColumns = [
-    { header: 'Date', key: 'date' },
+    { header: 'Date', key: 'transactionDate' },
     { header: 'Item', key: 'itemName' },
     { header: 'Type', key: 'adjustmentType' },
     { header: 'Quantity', key: 'quantity' },
@@ -155,19 +224,19 @@ export default function StockAdjustmentPage() {
     queryKey: ['adjustments', company?.id, financialYear?.id, 'all'],
     queryFn: () => window.electronAPI.dbQuery('stockAdjustment', 'findMany', {
       where: { companyId: company!.id, financialYearId: financialYear!.id },
-      include: { item: true }, orderBy: { date: 'desc' },
+      include: { details: { include: { item: true } }, department: true }, orderBy: { transactionDate: 'desc' },
     }),
     enabled: !!company?.id && !!financialYear?.id,
     refetchOnMount: true,
   });
 
   const getExportData = () => (allAdjustments || []).map((adj: any) => ({
-    date: formatDateDDMMYYYY(adj.date),
-    itemName: adj.item?.itemName || '',
-    adjustmentType: adj.adjustmentType,
-    quantity: adj.quantity,
-    reason: adj.reason || '',
-    adjustedBy: adj.adjustedBy || '',
+    transactionDate: formatDateDDMMYYYY(adj.transactionDate || adj.createdAt),
+    itemName: adj.details?.[0]?.item?.itemName || '',
+    adjustmentType: adj.remarks?.includes('INCREASE') ? 'INCREASE' : 'DECREASE',
+    quantity: adj.details?.[0]?.quantity || 0,
+    reason: adj.remarks?.split('): ')[1]?.split('.')[0] || '',
+    adjustedBy: adj.createdBy || '',
   }));
 
   const { data: items } = useQuery({
@@ -187,7 +256,7 @@ export default function StockAdjustmentPage() {
       const [data, total] = await Promise.all([
         window.electronAPI.dbQuery('stockAdjustment', 'findMany', {
           where: { companyId: company!.id, financialYearId: financialYear!.id },
-          include: { item: true }, skip: page * rowsPerPage, take: rowsPerPage, orderBy: { date: 'desc' },
+          include: { details: { include: { item: true } }, department: true }, skip: page * rowsPerPage, take: rowsPerPage, orderBy: { transactionDate: 'desc' },
         }),
         window.electronAPI.dbQuery('stockAdjustment', 'count', { where: { companyId: company!.id, financialYearId: financialYear!.id } }),
       ]);
@@ -197,29 +266,46 @@ export default function StockAdjustmentPage() {
   });
 
   const handleImportAdjustments = async (rows: any[]) => {
+    const total = rows.length;
+    let created = 0, skipped = 0;
+    const errors: string[] = [];
+    setImportProgress({ active: true, current: 0, total, created: 0, updated: 0, skipped: 0, errors: [] });
     try {
-      let created = 0, skipped = 0;
-      for (const row of rows) {
-        const itemName = row['Item'] || row['itemName'] || '';
-        if (!itemName) { skipped++; continue; }
-        const item = items?.find((i: any) => i.itemName === itemName);
-        if (!item) { skipped++; continue; }
-        await window.electronAPI.createStockAdjustment({
-            itemId: item.itemId || item.id,
-            companyId: company!.id,
-            financialYearId: financialYear!.id,
-            date: (() => { const raw = row['Date'] || row['date'] || ''; const d = parseDateDDMMYYYY(raw); return d || new Date(); })(),
-            adjustmentType: row['Type'] || row['adjustmentType'] || 'INCREASE',
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        try {
+          const itemName = row['Item'] || row['itemName'] || '';
+          if (!itemName) { skipped++; errors.push(`Row ${i + 1}: Missing item`); setImportProgress(prev => ({ ...prev, current: i + 1, skipped, errors })); continue; }
+          const item = items?.find((i: any) => i.itemName === itemName);
+          if (!item) { skipped++; errors.push(`Row ${i + 1}: Item "${itemName}" not found`); setImportProgress(prev => ({ ...prev, current: i + 1, skipped, errors })); continue; }
+          const transactionDate = normalizeDate(row['Date'] || row['date'] || '');
+          if (!transactionDate) {
+            skipped++;
+            errors.push(`Row ${i + 1} (${itemName}): Invalid date`);
+            setImportProgress(prev => ({ ...prev, current: i + 1, skipped, errors }));
+            continue;
+          }
+          await window.electronAPI.createStockAdjustment({
+            itemId: item.itemId || item.id, companyId: company!.id, financialYearId: financialYear!.id,
+            date: transactionDate, adjustmentType: row['Type'] || row['adjustmentType'] || 'INCREASE',
             quantity: Number(row['Quantity'] || row['quantity'] || 1),
-            reason: row['Reason'] || row['reason'] || '',
-            adjustedBy: row['Adjusted By'] || row['adjustedBy'] || '',
+            reason: row['Reason'] || row['reason'] || '', adjustedBy: row['Adjusted By'] || row['adjustedBy'] || '',
           });
-        created++;
+          created++;
+        } catch (err: any) {
+          skipped++;
+          errors.push(`Row ${i + 1}: ${err?.message || 'Unknown error'}`);
+        }
+        setImportProgress(prev => ({ ...prev, current: i + 1, created, skipped, errors }));
       }
       queryClient.invalidateQueries({ queryKey: ['adjustments'] });
       queryClient.invalidateQueries({ queryKey: ['report'] });
+      setImportProgress(prev => ({ ...prev, active: false }));
       toast.success(`Import: ${created} created, ${skipped} skipped`);
-    } catch (err: any) { toast.error('Import failed: ' + err.message); }
+    } catch (err: any) {
+      setImportProgress(prev => ({ ...prev, active: false }));
+      toast.error('Import failed: ' + err.message);
+    }
   };
 
   const saveMutation = useMutation({
@@ -235,14 +321,13 @@ export default function StockAdjustmentPage() {
       queryClient.invalidateQueries({ queryKey: ['stockBalance'] });
       queryClient.invalidateQueries({ queryKey: ['dashboard'] });
       queryClient.invalidateQueries({ queryKey: ['report'] });
+      suppressUnsavedWarning();
       setDialogOpen(false);
-      setFormData({ itemId: 0, departmentId: null, date: todayISO(), adjustmentType: 'INCREASE', quantity: 1, reason: '', adjustedBy: '', approvedBy: '', remarks: '' });
+    },
+    onError: (err: any) => {
+      toast.error(getErrorMessage(err, 'Failed to save stock adjustment'));
     },
   });
-
-  const handleSave = useCallback(() => {
-    saveMutation.mutate(formData);
-  }, [saveMutation, formData]);
 
   return (
     <Box>
@@ -251,6 +336,12 @@ export default function StockAdjustmentPage() {
         subtitle="Correct stock quantities via adjustments"
         actions={
           <Stack direction="row" spacing={1.5} alignItems="center">
+            <GuideButton pageId="stock-adjustment" />
+            <Tooltip title="Back to Material Operations">
+              <IconButton onClick={() => navigate('/inventory/movement')} sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1.5 }}>
+                <ArrowBack fontSize="small" />
+              </IconButton>
+            </Tooltip>
             <ImportExportButtons
               data={getExportData()}
               columns={exportColumns}
@@ -262,18 +353,18 @@ export default function StockAdjustmentPage() {
         }
       />
 
-      <AdjustmentsTable adjustments={adjustments} />
+      <ImportProgressDialog progress={importProgress} onClose={() => setImportProgress(getInitialProgress())} entityLabel="stock adjustments" />
+
+      <AdjustmentsTable adjustments={adjustments} isLoading={isLoading} />
 
       <TablePagination component="div" count={adjustments?.total || 0} page={page} onPageChange={(_, p) => setPage(p)} rowsPerPage={rowsPerPage} onRowsPerPageChange={(e) => { setRowsPerPage(parseInt(e.target.value)); setPage(0); }} rowsPerPageOptions={[25, 50, 100]} />
 
       <AdjustmentDialog
         open={dialogOpen}
-        formData={formData}
         items={items || []}
         departments={departments || []}
-        onFormChange={setFormData}
         onClose={() => setDialogOpen(false)}
-        onSave={handleSave}
+        onSave={(data) => saveMutation.mutate(data)}
         saving={saveMutation.isPending}
       />
     </Box>

@@ -62,6 +62,10 @@ export default function MetricCard({
   return (
     <Card
       onClick={onClick}
+      role={onClick ? 'button' : undefined}
+      aria-label={`${title}: ${formatValue(animated)}`}
+      tabIndex={onClick ? 0 : undefined}
+      onKeyDown={onClick ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(); } } : undefined}
       sx={{
         cursor: onClick ? 'pointer' : 'default',
         position: 'relative',

@@ -1,358 +1,389 @@
-import { PrismaClient, Prisma } from '@prisma/client';
-import { validateSufficientStock, getLatestBalance, recalculateBalancesAfterInsert, recalculateBalancesAfterDelete } from './stockValidation.service';
+import { PrismaClient } from '@prisma/client';
+import { TransactionEngine } from './transactionEngine.service';
+import { StockEngine } from './stockEngine.service';
+import { MaterialDemandService } from './materialDemand.service';
+import type { CreateTransactionInput } from '../../shared/types';
 
 export class IssueChallanService {
-  constructor(private prisma: PrismaClient) {}
+  private transactionEngine: TransactionEngine;
+  private stockEngine: StockEngine;
 
-  async generateChallanNo(companyId: number, financialYearId: number): Promise<string> {
-    const sequence = await this.prisma.challanSequence.upsert({
-      where: {
-        companyId_financialYearId_challanType: {
-          companyId,
-          financialYearId,
-          challanType: 'IC',
-        },
-      },
-      update: { lastNumber: { increment: 1 } },
-      create: { companyId, financialYearId, challanType: 'IC', lastNumber: 1 },
-    });
-    return `IC-${String(sequence.lastNumber).padStart(5, '0')}`;
+  constructor(private prisma: PrismaClient) {
+    this.transactionEngine = new TransactionEngine(prisma);
+    this.stockEngine = new StockEngine(prisma);
   }
 
   async create(data: {
     companyId: number;
     financialYearId: number;
-    departmentId: number;
     date: Date;
+    fromStoreId: number;
+    toStoreId: number;
     issuedBy: string;
-    approvedBy?: string;
     purpose?: string;
     remarks?: string;
-    items: Array<{ itemId: number; unitId: number; quantity: number; locationId?: number; usedAt?: string; purpose?: string; remarks?: string }>;
+    createdBy: string;
+    serviceRequestId?: number;
+    demandAllocations?: Array<{ demandItemId: number; quantityAllocated: number }>;
+    items: Array<{
+      itemId: number;
+      quantity: number;
+      rate?: number;
+      unitId?: number;
+      toLocationId?: number;
+      remarks?: string;
+    }>;
   }) {
-    const challanNo = await this.generateChallanNo(data.companyId, data.financialYearId);
-    return this.prisma.issueChallan.create({
-      data: {
-        challanNo,
-        companyId: data.companyId,
-        financialYearId: data.financialYearId,
-        departmentId: data.departmentId,
-        date: data.date,
-        issuedBy: data.issuedBy,
-        approvedBy: data.approvedBy,
-        purpose: data.purpose,
-        remarks: data.remarks,
-        items: {
-          create: data.items.map((item) => ({
-            itemId: item.itemId,
-            unitId: item.unitId,
-            quantity: item.quantity,
-            locationId: item.locationId || null,
-            usedAt: item.usedAt,
-            purpose: item.purpose,
-            remarks: item.remarks,
-          })),
-        },
-      },
-      include: { department: true, items: { include: { item: true, unit: true, location: true } } },
-    });
+    const input: CreateTransactionInput = {
+      companyId: data.companyId,
+      financialYearId: data.financialYearId,
+      voucherType: 'IC',
+      transactionDate: data.date,
+      fromStoreId: data.fromStoreId,
+      toStoreId: data.toStoreId,
+      issuedBy: data.issuedBy,
+      purpose: data.purpose,
+      remarks: data.remarks,
+      createdBy: data.createdBy,
+      items: data.items.map((item) => ({
+        itemId: item.itemId,
+        quantity: item.quantity,
+        rate: item.rate,
+        unitId: item.unitId,
+        toLocationId: item.toLocationId,
+        remarks: item.remarks,
+      })),
+    };
+
+    const result = await this.transactionEngine.createTransaction(input);
+
+    if (data.serviceRequestId && data.demandAllocations && data.demandAllocations.length > 0) {
+      await MaterialDemandService.createAllocations(
+        data.serviceRequestId,
+        result.transactionId,
+        data.demandAllocations,
+      );
+    }
+
+    await this.handleAssetInstallations(
+      data.companyId,
+      data.financialYearId,
+      result.transactionId,
+      data.items,
+      data.toStoreId,
+      data.date,
+      data.createdBy,
+    );
+
+    return result;
   }
 
-  async update(id: number, data: any) {
-    const existing = await this.prisma.issueChallan.findUnique({ where: { id } });
-    if (!existing) throw new Error('Issue challan not found');
-    if (existing.status !== 'Draft') throw new Error('Cannot edit a posted/cancelled challan');
-
-    return this.prisma.issueChallan.update({
-      where: { id },
-      data: {
-        departmentId: data.departmentId,
-        date: new Date(data.date),
-        issuedBy: data.issuedBy,
-        approvedBy: data.approvedBy,
-        purpose: data.purpose,
-        remarks: data.remarks,
-        items: {
-          deleteMany: {},
-          create: data.items.map((item: any) => ({
-            itemId: item.itemId,
-            unitId: item.unitId,
-            quantity: item.quantity,
-            locationId: item.locationId || null,
-            usedAt: item.usedAt,
-            purpose: item.purpose,
-            remarks: item.remarks,
-          })),
-        },
-      },
-      include: { department: true, items: { include: { item: true, unit: true, location: true } } },
+  async post(
+    transactionId: number,
+    companyId: number,
+    financialYearId: number,
+  ) {
+    const header = await this.prisma.transactionHeader.findUnique({
+      where: { id: transactionId },
+      include: { details: true },
     });
+    if (!header) throw new Error('Issue challan not found');
+    if (header.approvalStatus !== 'DRAFT') {
+      throw new Error(`Challan is not in Draft status (current: ${header.approvalStatus})`);
+    }
+
+    await this.transactionEngine.postTransaction(transactionId);
+
+    await this.handleAssetInstallations(
+      companyId,
+      financialYearId,
+      transactionId,
+      header.details.map((d) => ({
+        itemId: d.itemId,
+        quantity: Number(d.quantity),
+        toLocationId: d.toLocationId ?? undefined,
+      })),
+      header.toStoreId!,
+      header.transactionDate,
+      header.createdBy,
+    );
+
+    return this.findById(transactionId);
   }
 
-  async post(id: number, postedBy: string) {
-    return this.prisma.$transaction(async (tx) => {
-      const ic = await tx.issueChallan.findUnique({
-        where: { id },
-        include: { items: true, company: true, department: true },
-      });
-      if (!ic) throw new Error('Issue challan not found');
-      if (ic.status !== 'Draft') throw new Error(`Challan is not in Draft status (current: ${ic.status})`);
-
-      if (!ic.sourceStoreId) {
-        throw new Error('Issue challan must have a source store (sourceStoreId) for double-entry compliance');
-      }
-
-      const balanceChecks: Array<{ itemName: string; requested: number; available: number }> = [];
-      const qtyPerItemLocation = new Map<string, number>();
-      for (const item of ic.items) {
-        const key = `${item.itemId}-${(item as any).locationId ?? 'null'}`;
-        qtyPerItemLocation.set(key, (qtyPerItemLocation.get(key) || 0) + Number(item.quantity));
-      }
-      for (const [key, totalRequested] of qtyPerItemLocation) {
-        const [itemIdStr, locIdStr] = key.split('-');
-        const itemId = Number(itemIdStr);
-        const locationId = locIdStr === 'null' ? null : Number(locIdStr);
-        const validation = await validateSufficientStock(tx, ic.companyId, ic.financialYearId, itemId, ic.sourceStoreId, locationId, totalRequested);
-        if (!validation.sufficient) {
-          balanceChecks.push({ itemName: validation.itemName, requested: totalRequested, available: validation.available });
-        }
-      }
-      if (balanceChecks.length > 0) {
-        throw new Error(`Insufficient stock: ${balanceChecks.map((b) => `${b.itemName}: requested ${b.requested}, available ${b.available}`).join('; ')}`);
-      }
-
-      const lastEntries = await tx.$queryRaw<{ itemId: number; locationId: number | null; balanceQty: number }[]>`
-        SELECT itemId, locationId, balanceQty FROM StockTransaction
-        WHERE companyId = ${ic.companyId} AND financialYearId = ${ic.financialYearId} AND departmentId = ${ic.sourceStoreId}
-        AND id = (SELECT se2.id FROM StockTransaction se2 WHERE se2.itemId = StockTransaction.itemId
-        AND ((se2.locationId = StockTransaction.locationId) OR (se2.locationId IS NULL AND StockTransaction.locationId IS NULL))
-        AND se2.companyId = ${ic.companyId} AND se2.financialYearId = ${ic.financialYearId} AND se2.departmentId = ${ic.sourceStoreId}
-        ORDER BY se2.transactionDate DESC, se2.id DESC LIMIT 1)
-      `;
-
-      const balanceMap = new Map<string, number>();
-      for (const entry of lastEntries) {
-        const key = `${entry.itemId}-${entry.locationId ?? 'null'}`;
-        balanceMap.set(key, Number(entry.balanceQty));
-      }
-
-      const stockTransactions: any[] = [];
-      ic.items.forEach((item) => {
-        const sourceKey = `${item.itemId}-${(item as any).locationId ?? 'null'}`;
-        const prevBalance = balanceMap.get(sourceKey) || 0;
-        const newBalance = prevBalance - Number(item.quantity);
-        balanceMap.set(sourceKey, newBalance);
-        const itemRate = Number((item as any).rate) || 0;
-
-        stockTransactions.push({
-          companyId: ic.companyId,
-          financialYearId: ic.financialYearId,
-          itemId: item.itemId,
-          departmentId: ic.departmentId,
-          locationId: item.locationId || null,
-          transactionType: 'ISSUE',
-          transactionDate: ic.date,
-          quantityIn: item.quantity,
-          quantityOut: new Prisma.Decimal(0),
-          rate: new Prisma.Decimal(itemRate),
-          balanceQty: new Prisma.Decimal(newBalance),
-          referenceType: 'IssueChallan',
-          referenceId: id,
-          referenceNo: ic.challanNo,
-          condition: 'GOOD',
-          remarks: `From ${ic.challanNo}`,
-          createdBy: postedBy,
-        });
-
-        stockTransactions.push({
-          companyId: ic.companyId,
-          financialYearId: ic.financialYearId,
-          itemId: item.itemId,
-          departmentId: ic.sourceStoreId,
-          locationId: null,
-          transactionType: 'ISSUE',
-          transactionDate: ic.date,
-          quantityIn: new Prisma.Decimal(0),
-          quantityOut: item.quantity,
-          rate: new Prisma.Decimal(itemRate),
-          balanceQty: new Prisma.Decimal(newBalance),
-          referenceType: 'IssueChallan',
-          referenceId: id,
-          referenceNo: ic.challanNo,
-          condition: 'GOOD',
-          remarks: `From ${ic.challanNo} - Source Store`,
-          createdBy: postedBy,
-        });
-      });
-
-      await tx.stockTransaction.createMany({ data: stockTransactions });
-
-      // FIX #4: Recalculate balances if backdated — both source and destination departments
-      for (const item of ic.items) {
-        // Recalculate source department (stock deducted from here)
-        await recalculateBalancesAfterInsert(tx, ic.companyId, ic.financialYearId, item.itemId, ic.sourceStoreId || null, null, ic.date);
-        // Recalculate destination department (stock added here)
-        await recalculateBalancesAfterInsert(tx, ic.companyId, ic.financialYearId, item.itemId, ic.departmentId, item.locationId || null, ic.date);
-      }
-
-      for (const item of ic.items) {
-        if (item.locationId) {
-          const existing = await tx.assetInstallation.findFirst({
-            where: { itemId: item.itemId, locationId: item.locationId, status: 'Active' },
-          });
-          if (existing) {
-            await tx.assetInstallation.update({ where: { id: existing.id }, data: { quantity: { increment: item.quantity } } });
-          } else {
-            await tx.assetInstallation.create({
-              data: {
-                itemId: item.itemId,
-                locationId: item.locationId,
-                issueChallanId: id,
-                installedDate: ic.date,
-                quantity: item.quantity,
-                installedBy: postedBy,
-                status: 'Active',
-                remarks: item.usedAt || item.purpose,
-              },
-            });
-          }
-        }
-      }
-
-      await tx.issueChallan.update({ where: { id }, data: { status: 'Posted', postedAt: new Date(), postedBy } });
-      await tx.auditLog.create({
-        data: {
-          companyId: ic.companyId,
-          action: 'POST',
-          tableName: 'IssueChallan',
-          recordId: id,
-          recordUuid: ic.uuid,
-          description: `Issue Challan ${ic.challanNo} posted to ${ic.department.name} with ${ic.items.length} items`,
-          newValues: JSON.stringify({ status: 'Posted', postedAt: new Date() }),
-        },
-      });
-
-      return this.prisma.issueChallan.findUnique({
-        where: { id },
-        include: { department: true, items: { include: { item: true, unit: true, location: true } } },
-      });
-    });
-  }
-
-  async delete(id: number) {
-    const existing = await this.prisma.issueChallan.findUnique({ where: { id }, include: { items: true } });
-    if (!existing) throw new Error('Issue challan not found');
-    if (existing.status === 'Posted') throw new Error('Cannot delete a posted challan. Use cancel instead to preserve audit trail.');
-    if (existing.status === 'Cancelled') throw new Error('Cannot delete a cancelled challan');
-
-    return this.prisma.$transaction(async (tx) => {
-      await tx.issueChallanItem.deleteMany({ where: { issueChallanId: id } });
-      await tx.issueChallan.delete({ where: { id } });
-      return { success: true };
-    });
-  }
-
-  async cancel(id: number, cancelReason: string, cancelledBy: string) {
-    // FIX #14: Require cancel reason
-    if (!cancelReason || cancelReason.trim().length === 0) {
+  async cancel(
+    transactionId: number,
+    companyId: number,
+    financialYearId: number,
+    reason: string,
+    cancelledBy: string,
+  ) {
+    if (!reason || reason.trim().length === 0) {
       throw new Error('Cancel reason is required');
     }
 
-    return this.prisma.$transaction(async (tx) => {
-      // FIX #8: Atomic status check inside transaction
-      const ic = await tx.issueChallan.findUnique({ where: { id }, include: { items: true } });
-      if (!ic) throw new Error('Issue challan not found');
-      if (ic.status !== 'Posted') throw new Error(`Only posted challans can be cancelled (current status: ${ic.status})`);
+    const header = await this.prisma.transactionHeader.findUnique({
+      where: { id: transactionId },
+    });
+    if (!header) throw new Error('Issue challan not found');
+    if (header.voucherType === 'RV') {
+      throw new Error('Cannot cancel a reversal transaction');
+    }
+    if (header.approvalStatus !== 'POSTED') {
+      throw new Error(`Only posted challans can be cancelled (current status: ${header.approvalStatus})`);
+    }
 
-      const reversalEntries: any[] = [];
-      for (const item of ic.items) {
-        // Get current balance at destination (to reverse the ISSUE_IN)
-        const lastTxn = await tx.stockTransaction.findFirst({
-          where: { referenceType: 'IssueChallan', referenceId: id, itemId: item.itemId, departmentId: ic.departmentId },
-          orderBy: [{ transactionDate: 'desc' }, { id: 'desc' }],
-        });
-        const destBalance = lastTxn ? Number(lastTxn.balanceQty) : 0;
-        const reversalQty = Number(item.quantity);
+    const linkedConsumptions = await this.prisma.materialConsumptionItem.findMany({
+      where: { transactionHeaderId: transactionId, materialConsumption: { status: 'POSTED' } },
+      include: { materialConsumption: true },
+    });
+    if (linkedConsumptions.length > 0) {
+      const consumptionNos = [...new Set(linkedConsumptions.map((c) => c.materialConsumption.consumptionNumber))].join(', ');
+      throw new Error(`Cannot cancel: linked consumption records exist (${consumptionNos}). Reverse consumption first.`);
+    }
 
-        // Reversal 1: Remove stock from DESTINATION (undo the ISSUE quantityIn)
-        reversalEntries.push({
-          companyId: ic.companyId,
-          financialYearId: ic.financialYearId,
-          itemId: item.itemId,
-          departmentId: ic.departmentId,
-          locationId: lastTxn?.locationId || item.locationId,
-          transactionType: 'REVERSAL',
-          transactionDate: new Date(),
-          quantityIn: new Prisma.Decimal(0),
-          quantityOut: new Prisma.Decimal(reversalQty),
-          rate: new Prisma.Decimal(0),
-          balanceQty: new Prisma.Decimal(destBalance - reversalQty),
-          referenceType: 'IssueChallan',
-          referenceId: id,
-          referenceNo: ic.challanNo,
-          remarks: `Reversal for cancelled ${ic.challanNo} — destination: ${cancelReason}`,
-          createdBy: cancelledBy,
-        });
+    const details = await this.prisma.transactionDetail.findMany({
+      where: { transactionId },
+    });
 
-        // Reversal 2: Add stock back to SOURCE (undo the ISSUE quantityOut)
-        const sourceBalance = await tx.stockTransaction.findFirst({
-          where: { companyId: ic.companyId, financialYearId: ic.financialYearId, itemId: item.itemId, departmentId: ic.sourceStoreId },
-          orderBy: [{ transactionDate: 'desc' }, { id: 'desc' }],
-          select: { balanceQty: true },
-        });
-        const srcBal = sourceBalance ? Number(sourceBalance.balanceQty) : 0;
+    const result = await this.transactionEngine.reverseAndCancel({
+      companyId,
+      financialYearId,
+      transactionDate: new Date(),
+      fromStoreId: header.fromStoreId,
+      toStoreId: header.fromStoreId,
+      remarks: `Reversal for cancelled ${header.voucherNo}: ${reason}`,
+      createdBy: cancelledBy,
+      items: details.map((d) => ({
+        itemId: d.itemId,
+        quantity: Number(d.quantity),
+        rate: Number(d.rate || 0),
+        serialNumber: d.serialNumber || null,
+      })),
+    }, transactionId, reason);
 
-        reversalEntries.push({
-          companyId: ic.companyId,
-          financialYearId: ic.financialYearId,
-          itemId: item.itemId,
-          departmentId: ic.sourceStoreId,
-          locationId: null,
-          transactionType: 'REVERSAL',
-          transactionDate: new Date(),
-          quantityIn: new Prisma.Decimal(reversalQty),
-          quantityOut: new Prisma.Decimal(0),
-          rate: new Prisma.Decimal(0),
-          balanceQty: new Prisma.Decimal(srcBal + reversalQty),
-          referenceType: 'IssueChallan',
-          referenceId: id,
-          referenceNo: ic.challanNo,
-          remarks: `Reversal for cancelled ${ic.challanNo} — source restored: ${cancelReason}`,
-          createdBy: cancelledBy,
-        });
+    await MaterialDemandService.reverseAllocationsForTransaction(transactionId);
 
-        // FIX #9: Deactivate any asset installations created by this issue
-        const installations = await tx.assetInstallation.findMany({
-          where: { issueChallanId: id, itemId: item.itemId, status: 'Active' },
-        });
-        for (const inst of installations) {
-          await tx.assetInstallation.update({
-            where: { id: inst.id },
-            data: {
-              status: 'Inactive',
-              remarks: `Issue challan ${ic.challanNo} cancelled (closed on ${new Date().toISOString().split('T')[0]} by ${cancelledBy})`,
+    await this.deactivateAssetInstallations(transactionId);
+
+    return result;
+  }
+
+  async findAll(
+    companyId: number,
+    financialYearId: number,
+    options?: {
+      status?: string;
+      fromStoreId?: number;
+      toStoreId?: number;
+      search?: string;
+      page?: number;
+      limit?: number;
+    },
+  ) {
+    const where: any = {
+      companyId,
+      financialYearId,
+      voucherType: 'IC',
+    };
+
+    if (options?.status) {
+      where.approvalStatus = options.status;
+    }
+    if (options?.fromStoreId) {
+      where.fromStoreId = options.fromStoreId;
+    }
+    if (options?.toStoreId) {
+      where.toStoreId = options.toStoreId;
+    }
+    if (options?.search) {
+      where.OR = [
+        { voucherNo: { contains: options.search } },
+        { issuedBy: { contains: options.search } },
+        { purpose: { contains: options.search } },
+        { remarks: { contains: options.search } },
+      ];
+    }
+
+    const page = options?.page || 1;
+    const limit = options?.limit || 20;
+    const skip = (page - 1) * limit;
+
+    const [data, total] = await Promise.all([
+      this.prisma.transactionHeader.findMany({
+        where,
+        include: {
+          fromStore: true,
+          toStore: true,
+          details: { include: { item: true } },
+          demandAllocations: {
+            include: {
+              materialDemandItem: {
+                include: { serviceRequest: { select: { id: true, requestNumber: true } } },
+              },
             },
-          });
-        }
-      }
+          },
+        },
+        orderBy: [{ transactionDate: 'desc' }, { id: 'desc' }],
+        skip,
+        take: limit,
+      }),
+      this.prisma.transactionHeader.count({ where }),
+    ]);
 
-      if (reversalEntries.length > 0) {
-        await tx.stockTransaction.createMany({ data: reversalEntries });
-      }
-      await tx.issueChallan.update({ where: { id }, data: { status: 'Cancelled', cancelledAt: new Date(), cancelReason } });
-      await tx.auditLog.create({
-        data: {
-          companyId: ic.companyId,
-          action: 'CANCEL',
-          tableName: 'IssueChallan',
-          recordId: id,
-          recordUuid: ic.uuid,
-          description: `Issue Challan ${ic.challanNo} cancelled: ${cancelReason}`,
-          oldValues: JSON.stringify({ status: 'Posted' }),
-          newValues: JSON.stringify({ status: 'Cancelled', cancelReason }),
+    return {
+      data,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    };
+  }
+
+  async findById(id: number) {
+    return this.prisma.transactionHeader.findUnique({
+      where: { id },
+      include: {
+        fromStore: true,
+        toStore: true,
+        details: { include: { item: true } },
+        ledgers: true,
+        demandAllocations: {
+          include: {
+            materialDemandItem: {
+              include: { serviceRequest: { select: { id: true, requestNumber: true } } },
+            },
+          },
+        },
+      },
+    });
+  }
+
+  private async handleAssetInstallations(
+    companyId: number,
+    financialYearId: number,
+    transactionId: number,
+    items: Array<{
+      itemId: number;
+      quantity: number;
+      toLocationId?: number;
+    }>,
+    toStoreId: number,
+    transactionDate: Date,
+    createdBy: string,
+  ) {
+    const itemIds = items.filter(i => i.toLocationId).map(i => i.itemId);
+    if (itemIds.length === 0) return;
+
+    const itemRecords = await this.prisma.item.findMany({
+      where: { id: { in: itemIds } },
+      select: { id: true, itemType: true, isSerialized: true },
+    });
+    const itemMap = new Map(itemRecords.map(r => [r.id, r]));
+
+    const locationIds = [...new Set(items.filter(i => i.toLocationId).map(i => i.toLocationId!))];
+    const locationToRoomId = new Map<number, number>();
+    for (const locId of locationIds) {
+      const roomId = await this.ensureRoomForLocation(locId);
+      locationToRoomId.set(locId, roomId);
+    }
+
+    for (const item of items) {
+      if (!item.toLocationId) continue;
+
+      const itemRecord = itemMap.get(item.itemId);
+      const isAsset = itemRecord?.itemType === 'ASSET' || itemRecord?.isSerialized === true;
+      if (!isAsset) continue;
+
+      const roomId = locationToRoomId.get(item.toLocationId);
+      if (!roomId) continue;
+
+      const existing = await this.prisma.assetInstallation.findFirst({
+        where: {
+          itemId: item.itemId,
+          roomId,
+          storeId: toStoreId,
+          status: 'ACTIVE',
         },
       });
+
+      if (existing) {
+        await this.prisma.assetInstallation.update({
+          where: { id: existing.id },
+          data: { quantity: { increment: item.quantity } },
+        });
+      } else {
+        await this.prisma.assetInstallation.create({
+          data: {
+            itemId: item.itemId,
+            roomId,
+            storeId: toStoreId,
+            quantity: item.quantity,
+            installedDate: transactionDate,
+            installedBy: createdBy,
+            status: 'ACTIVE',
+          },
+        });
+      }
+    }
+  }
+
+  private async deactivateAssetInstallations(transactionId: number) {
+    const details = await this.prisma.transactionDetail.findMany({
+      where: { transactionId },
     });
-    return this.prisma.issueChallan.findUnique({ where: { id } });
+
+    for (const detail of details) {
+      if (!detail.toLocationId) continue;
+
+      const header = await this.prisma.transactionHeader.findUnique({
+        where: { id: transactionId },
+      });
+      if (!header) continue;
+
+      const location = await this.prisma.location.findUnique({ where: { id: detail.toLocationId } });
+      if (!location || location.locationType !== 'Room') continue;
+
+      const room = await this.prisma.room.findFirst({
+        where: { locationId: location.id, name: location.name },
+      });
+      if (!room) continue;
+
+      const installations = await this.prisma.assetInstallation.findMany({
+        where: {
+          itemId: detail.itemId,
+          roomId: room.id,
+          storeId: header.toStoreId!,
+          status: 'ACTIVE',
+        },
+      });
+
+      for (const inst of installations) {
+        await this.prisma.assetInstallation.update({
+          where: { id: inst.id },
+          data: {
+            status: 'INACTIVE',
+            uninstalledDate: new Date(),
+            remarks: `Issue challan ${header.voucherNo} cancelled`,
+          },
+        });
+      }
+    }
+  }
+
+  private async ensureRoomForLocation(locationId: number): Promise<number> {
+    const location = await this.prisma.location.findUnique({ where: { id: locationId } });
+    if (!location) throw new Error(`Location not found: ${locationId}`);
+    if (location.locationType !== 'Room') throw new Error(`Location ${locationId} is not a Room`);
+
+    const existing = await this.prisma.room.findFirst({
+      where: { locationId: location.id, name: location.name },
+    });
+    if (existing) return existing.id;
+
+    const created = await this.prisma.room.create({
+      data: { locationId: location.id, name: location.name, isActive: true },
+    });
+    return created.id;
   }
 }

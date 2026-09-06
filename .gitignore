@@ -2,6 +2,8 @@ node_modules/
 dist/
 dist-electron/
 release/
+release-build/
+release-fresh/
 *.db
 *.db-journal
 *.db-wal
@@ -24,6 +26,7 @@ tests/
 *.map
 tsconfig.node.tsbuildinfo
 prisma/dev.db.*
+prisma/schema_temp.prisma
 
 # AI Agent directories
 .agent/
@@ -82,3 +85,14 @@ dashboard.html
 design-plan.md
 invoice.html
 raw_stock.txt
+query.sql
+translate.py
+ledger-benchmark.js
+phase22-benchmark.js
+
+# Phase reports & test artifacts
+PHASE_*.md
+TEST-REPORT.md
+test-*.js
+test-*.json
+docs/

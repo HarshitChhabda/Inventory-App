@@ -1,183 +1,120 @@
 import { PrismaClient, Prisma } from '@prisma/client';
 import ExcelJS from 'exceljs';
 
+type TransactionWhereInput = Prisma.TransactionHeaderWhereInput;
+
 export class ReportService {
   constructor(private prisma: PrismaClient) {}
 
-  async getReceiptRegister(companyId: number, financialYearId: number, startDate?: Date, endDate?: Date, vendorId?: number) {
-    const where: any = { companyId, financialYearId, status: 'Posted' };
-    if (startDate && endDate) where.date = { gte: startDate, lte: endDate };
-    if (vendorId) where.vendorId = vendorId;
-    return this.prisma.receiptChallan.findMany({ where, include: { vendor: true, items: { include: { item: true, unit: true } } }, orderBy: { date: 'asc' } });
+  // ─── PARAMETERIZED REPORT GENERATOR ─────────────
+  // Eliminates 6 near-duplicate report methods (receipt, issue, damage, transfer, vendorReturn, adjustment)
+
+  /**
+   * Generate a transaction report by voucher type.
+   * Supports optional date range and entity-specific filters.
+   */
+  private async getTransactionReport(
+    companyId: number,
+    financialYearId: number,
+    voucherType: string,
+    options: {
+      startDate?: Date;
+      endDate?: Date;
+      vendorId?: number;
+      fromStoreId?: number;
+      toStoreId?: number;
+      itemId?: number;
+      orderBy?: 'asc' | 'desc';
+    } = {},
+  ) {
+    const where: TransactionWhereInput = {
+      companyId,
+      financialYearId,
+      voucherType,
+      approvalStatus: 'POSTED',
+    };
+    if (options.startDate && options.endDate) {
+      where.transactionDate = { gte: options.startDate, lte: options.endDate };
+    }
+    if (options.vendorId) where.vendorId = options.vendorId;
+    if (options.fromStoreId) where.fromStoreId = options.fromStoreId;
+    if (options.toStoreId) where.toStoreId = options.toStoreId;
+    if (options.itemId) where.details = { some: { itemId: options.itemId } };
+
+    return this.prisma.transactionHeader.findMany({
+      where,
+      include: {
+        details: { include: { item: true } },
+        vendor: true,
+        fromStore: true,
+        toStore: true,
+      },
+      orderBy: { transactionDate: options.orderBy || 'desc' },
+    });
   }
 
-  async getIssueRegister(companyId: number, financialYearId: number, startDate?: Date, endDate?: Date, departmentId?: number) {
-    const where: any = { companyId, financialYearId, status: 'Posted' };
-    if (startDate && endDate) where.date = { gte: startDate, lte: endDate };
-    if (departmentId) where.departmentId = departmentId;
-    return this.prisma.issueChallan.findMany({ where, include: { department: true, items: { include: { item: true, unit: true, location: true } } }, orderBy: { date: 'asc' } });
+  async getReceiptReport(companyId: number, financialYearId: number, startDate?: Date, endDate?: Date, vendorId?: number) {
+    return this.getTransactionReport(companyId, financialYearId, 'RC', { startDate, endDate, vendorId });
   }
 
-  async getCurrentStockReport(companyId: number, financialYearId: number) {
-    return this.prisma.$queryRaw<any[]>`
-      SELECT i.id, i.itemCode, i.itemName, c.name as categoryName, u.name as unitName,
-        i.minimumStockLevel, COALESCE(lastSE.balanceQty, 0) as currentStock
-      FROM Item i
-      INNER JOIN ItemCategory c ON c.id = i.categoryId
-      INNER JOIN Unit u ON u.id = i.unitId
-      LEFT JOIN (
-        SELECT se.itemId, se.balanceQty FROM StockTransaction se
-        WHERE se.companyId = ${companyId} AND se.financialYearId = ${financialYearId}
-        AND se.id = (SELECT se2.id FROM StockTransaction se2 WHERE se2.itemId = se.itemId AND se2.companyId = ${companyId} AND se2.financialYearId = ${financialYearId} ORDER BY se2.transactionDate DESC, se2.id DESC LIMIT 1)
-      ) lastSE ON lastSE.itemId = i.id
-      WHERE i.isActive = 1 ORDER BY i.itemName ASC
-    `;
+  async getIssueReport(companyId: number, financialYearId: number, startDate?: Date, endDate?: Date, fromStoreId?: number, toStoreId?: number) {
+    return this.getTransactionReport(companyId, financialYearId, 'IC', { startDate, endDate, fromStoreId, toStoreId });
   }
 
-  async getLowStockReport(companyId: number, financialYearId: number) {
-    return this.prisma.$queryRaw<any[]>`
-      SELECT i.id, i.itemCode, i.itemName, c.name as categoryName, u.name as unitName,
-        i.minimumStockLevel, COALESCE(lastSE.balanceQty, 0) as currentStock
-      FROM Item i
-      INNER JOIN ItemCategory c ON c.id = i.categoryId
-      INNER JOIN Unit u ON u.id = i.unitId
-      LEFT JOIN (
-        SELECT se.itemId, se.balanceQty FROM StockTransaction se
-        WHERE se.companyId = ${companyId} AND se.financialYearId = ${financialYearId}
-        AND se.id = (SELECT se2.id FROM StockTransaction se2 WHERE se2.itemId = se.itemId AND se2.companyId = ${companyId} AND se2.financialYearId = ${financialYearId} ORDER BY se2.transactionDate DESC, se2.id DESC LIMIT 1)
-      ) lastSE ON lastSE.itemId = i.id
-      WHERE i.isActive = 1 AND COALESCE(lastSE.balanceQty, 0) < i.minimumStockLevel
-      ORDER BY i.itemName ASC
-    `;
+  async getDamageReport(companyId: number, financialYearId: number, startDate?: Date, endDate?: Date, itemId?: number) {
+    return this.getTransactionReport(companyId, financialYearId, 'DM', { startDate, endDate, itemId, orderBy: 'desc' });
   }
 
-  async getDeadStockReport(companyId: number, financialYearId: number, months = 6) {
-    const cutoffDate = new Date();
-    cutoffDate.setMonth(cutoffDate.getMonth() - months);
-    return this.prisma.$queryRaw<any[]>`
-      SELECT i.id, i.itemCode, i.itemName, c.name as categoryName, u.name as unitName,
-        COALESCE(lastSE.balanceQty, 0) as currentStock, MAX(se.transactionDate) as lastMovementDate
-      FROM Item i
-      INNER JOIN ItemCategory c ON c.id = i.categoryId
-      INNER JOIN Unit u ON u.id = i.unitId
-      LEFT JOIN StockTransaction se ON se.itemId = i.id AND se.companyId = ${companyId} AND se.financialYearId = ${financialYearId}
-      LEFT JOIN (
-        SELECT se2.itemId, se2.balanceQty FROM StockTransaction se2
-        WHERE se2.companyId = ${companyId} AND se2.financialYearId = ${financialYearId}
-        AND se2.id = (SELECT se3.id FROM StockTransaction se3 WHERE se3.itemId = se2.itemId AND se3.companyId = ${companyId} AND se3.financialYearId = ${financialYearId} ORDER BY se3.transactionDate DESC, se3.id DESC LIMIT 1)
-      ) lastSE ON lastSE.itemId = i.id
-      WHERE i.isActive = 1 AND COALESCE(lastSE.balanceQty, 0) > 0
-      GROUP BY i.id, i.itemCode, i.itemName, c.name, u.name, lastSE.balanceQty
-      HAVING MAX(se.transactionDate) < ${cutoffDate.toISOString()} OR MAX(se.transactionDate) IS NULL
-      ORDER BY i.itemName ASC
-    `;
+  async getTransferReport(companyId: number, financialYearId: number, startDate?: Date, endDate?: Date, fromStoreId?: number, toStoreId?: number) {
+    return this.getTransactionReport(companyId, financialYearId, 'TC', { startDate, endDate, fromStoreId, toStoreId });
   }
 
-  async getDepartmentWiseStock(companyId: number, financialYearId: number) {
-    return this.prisma.$queryRaw<any[]>`
-      SELECT d.name as departmentName, i.itemName, i.itemCode, u.name as unitName,
-        SUM(se.quantityIn) as totalIn, SUM(se.quantityOut) as totalOut,
-        (SUM(se.quantityIn) - SUM(se.quantityOut)) as balance
-      FROM StockTransaction se
-      INNER JOIN Department d ON d.id = se.departmentId
-      INNER JOIN Item i ON i.id = se.itemId
-      INNER JOIN Unit u ON u.id = i.unitId
-      WHERE se.companyId = ${companyId} AND se.financialYearId = ${financialYearId} AND se.departmentId IS NOT NULL
-      GROUP BY d.name, i.itemName, i.itemCode, u.name HAVING balance > 0
-      ORDER BY d.name, i.itemName
-    `;
+  async getVendorReturnReport(companyId: number, financialYearId: number, startDate?: Date, endDate?: Date, vendorId?: number) {
+    return this.getTransactionReport(companyId, financialYearId, 'VR', { startDate, endDate, vendorId });
   }
 
-  async getLocationWiseReport(companyId: number) {
-    return this.prisma.$queryRaw<any[]>`
-      SELECT l.locationType, l.locationName, i.itemName, i.itemCode, u.name as unitName,
-        ai.quantity, ai.installedDate, ai.status
-      FROM AssetInstallation ai
-      INNER JOIN Location l ON l.id = ai.locationId
-      INNER JOIN Item i ON i.id = ai.itemId
-      INNER JOIN Unit u ON u.id = i.unitId
-      WHERE ai.status = 'Active'
-      ORDER BY l.locationType, l.locationName, i.itemName
-    `;
+  async getStockAdjustmentReport(companyId: number, financialYearId: number, startDate?: Date, endDate?: Date) {
+    return this.getTransactionReport(companyId, financialYearId, 'AD', { startDate, endDate });
   }
 
-  async getInstallationReport(companyId: number) {
-    return this.prisma.$queryRaw<any[]>`
-      SELECT l.locationType, l.locationName, i.itemName, i.itemCode, u.name as unitName,
-        ai.quantity, ai.installedDate, ai.installedBy, ai.status
-      FROM AssetInstallation ai
-      INNER JOIN Location l ON l.id = ai.locationId
-      INNER JOIN Item i ON i.id = ai.itemId
-      INNER JOIN Unit u ON u.id = i.unitId
-      ORDER BY l.locationType, l.locationName, ai.installedDate DESC
-    `;
-  }
-
-  async getDamageReport(companyId?: number, startDate?: Date, endDate?: Date, itemId?: number) {
-    const where: any = {};
-    if (companyId) where.companyId = companyId;
-    if (startDate && endDate) where.date = { gte: startDate, lte: endDate };
+  async getStockLedger(companyId: number, financialYearId: number, itemId?: number, storeId?: number) {
+    const where: Prisma.LedgerEntryWhereInput = { companyId, financialYearId };
     if (itemId) where.itemId = itemId;
-    return this.prisma.damageEntry.findMany({ where, include: { item: true, location: true }, orderBy: { date: 'desc' } });
-  }
-
-  async getVendorPurchaseReport(companyId: number, financialYearId: number, vendorId?: number) {
-    const where: any = { companyId, financialYearId, status: 'Posted', sourceType: 'Vendor' };
-    if (vendorId) where.vendorId = vendorId;
-    return this.prisma.receiptChallan.findMany({ where, include: { vendor: true, items: { include: { item: true, unit: true } } }, orderBy: { date: 'asc' } });
-  }
-
-  async getAuditReport(companyId: number, startDate?: Date, endDate?: Date, userId?: number, action?: string) {
-    const where: any = { companyId };
-    if (startDate && endDate) where.createdAt = { gte: startDate, lte: endDate };
-    if (userId) where.userId = userId;
-    if (action) where.action = action;
-    return this.prisma.auditLog.findMany({ where, orderBy: { createdAt: 'desc' } });
-  }
-
-  async getConsumptionReport(companyId: number, financialYearId: number) {
-    return this.prisma.$queryRaw<any[]>`
-      SELECT strftime('%Y-%m', se.transactionDate) as month,
-        i.itemName, i.itemCode, u.name as unitName, SUM(se.quantityOut) as consumed
-      FROM StockTransaction se
-      INNER JOIN Item i ON i.id = se.itemId
-      INNER JOIN Unit u ON u.id = i.unitId
-      WHERE se.companyId = ${companyId} AND se.financialYearId = ${financialYearId} AND se.transactionType = 'ISSUE'
-      GROUP BY strftime('%Y-%m', se.transactionDate), i.itemName, i.itemCode, u.name
-      ORDER BY month DESC, i.itemName ASC
-    `;
-  }
-
-  async getMaterialMovementReport(companyId: number, financialYearId: number, itemId: number) {
-    return this.prisma.stockTransaction.findMany({
-      where: { companyId, financialYearId, itemId },
-      include: { department: true, location: true },
-      orderBy: { transactionDate: 'asc' },
+    if (storeId) where.storeId = storeId;
+    return this.prisma.ledgerEntry.findMany({
+      where,
+      include: {
+        item: { include: { category: true, unit: true } },
+        store: true,
+      },
+      orderBy: { transactionDate: 'desc' },
     });
   }
 
-  async getTransferRegister(companyId: number, financialYearId: number) {
-    return this.prisma.transferChallan.findMany({
-      where: { companyId, financialYearId, status: 'Posted' },
-      include: { fromDepartment: true, toDepartment: true, items: { include: { item: true } } },
-      orderBy: { date: 'asc' },
-    });
-  }
-
-  async getVendorReturnRegister(companyId: number, financialYearId: number) {
-    return this.prisma.vendorReturnChallan.findMany({
-      where: { companyId, financialYearId, status: 'Posted' },
-      include: { vendor: true, items: { include: { item: true } } },
-      orderBy: { date: 'asc' },
-    });
-  }
-
-  async getStockAdjustmentReport(companyId: number, financialYearId: number) {
-    return this.prisma.stockAdjustment.findMany({
+  async getStockSummary(companyId: number, financialYearId: number) {
+    const grouped = await this.prisma.ledgerEntry.groupBy({
+      by: ['itemId', 'storeId'],
       where: { companyId, financialYearId },
-      include: { item: true },
-      orderBy: { date: 'asc' },
+      _sum: { quantityIn: true, quantityOut: true },
+      _count: true,
     });
+
+    // Batch: fetch all items and stores in 2 queries instead of 2N
+    const itemIds = [...new Set(grouped.map((g) => g.itemId))];
+    const storeIds = [...new Set(grouped.map((g) => g.storeId))];
+    const [items, stores] = await Promise.all([
+      this.prisma.item.findMany({ where: { id: { in: itemIds } }, include: { category: true, unit: true } }),
+      this.prisma.store.findMany({ where: { id: { in: storeIds } } }),
+    ]);
+    const itemMap = new Map(items.map((i) => [i.id, i]));
+    const storeMap = new Map(stores.map((s) => [s.id, s]));
+
+    return grouped.map((g) => ({
+      ...g,
+      item: itemMap.get(g.itemId) || null,
+      store: storeMap.get(g.storeId) || null,
+      balance: Number(g._sum.quantityIn || 0) - Number(g._sum.quantityOut || 0),
+    }));
   }
 
   async exportToExcel(data: any[], columns: Array<{ header: string; key: string; width?: number }>, filename: string): Promise<string> {

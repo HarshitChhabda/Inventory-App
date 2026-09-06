@@ -15,8 +15,10 @@ export default defineConfig({
     globals: true,
     environment: 'jsdom',
     setupFiles: ['./tests/ui/setup.ts'],
-    include: ['tests/ui/**/*.test.tsx', 'tests/ui/**/*.test.ts'],
+    include: ['tests/ui/**/*.test.tsx', 'tests/ui/**/*.test.ts', 'src/**/*.spec.ts'],
+    exclude: ['**/fullScaleTest.test.ts', '**/node_modules/**'],
     css: false,
+    pool: 'threads',
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html'],

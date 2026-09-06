@@ -2,6 +2,7 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import electron from 'vite-plugin-electron';
 import renderer from 'vite-plugin-electron-renderer';
+import compression from 'vite-plugin-compression';
 import path from 'path';
 
 export default defineConfig({
@@ -46,6 +47,7 @@ export default defineConfig({
       },
     ]),
     renderer(),
+    compression(),
   ],
   resolve: {
     alias: {
@@ -59,6 +61,14 @@ export default defineConfig({
     rollupOptions: {
       input: {
         main: path.resolve(__dirname, 'index.html'),
+      },
+      output: {
+        manualChunks: {
+          'vendor-mui': ['@mui/material', '@mui/icons-material', '@emotion/react', '@emotion/styled'],
+          'vendor-react': ['react', 'react-dom', 'react-router-dom'],
+          'vendor-charts': ['recharts'],
+          'vendor-utils': ['date-fns', 'file-saver'],
+        },
       },
     },
   },

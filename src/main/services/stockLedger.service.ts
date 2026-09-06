@@ -1,300 +1,324 @@
 import { PrismaClient, Prisma } from '@prisma/client';
-import { validateSufficientStock, getLatestBalance, recalculateBalancesAfterInsert } from './stockValidation.service';
+import { StockEngine } from './stockEngine.service';
+import { StockBalanceService } from './stockBalance.service';
 
 export class StockLedgerService {
-  constructor(private prisma: PrismaClient) {}
+  private stockEngine: StockEngine;
 
-  async getBalance(companyId: number, financialYearId: number, itemId: number, departmentId: number | null, locationId: number): Promise<number> {
-    return getLatestBalance(this.prisma, companyId, financialYearId, itemId, departmentId, locationId);
+  constructor(private prisma: PrismaClient) {
+    this.stockEngine = new StockEngine(prisma);
   }
 
-  /**
-   * FIX #2: Balance check + write are now atomic inside $transaction.
-   * FIX #4: Supports backdated transactions with automatic recalculation of subsequent balances.
-   */
-  async createTransfer(data: {
+  async getLedger(filters: {
     companyId: number;
     financialYearId: number;
-    itemId: number;
-    sourceLocationId: number;
-    destLocationId: number;
-    qty: number;
-    rate?: number;
-    transferredBy: string;
-    remarks?: string;
-    transactionDate?: Date;
+    itemId?: number;
+    storeId?: number;
+    startDate?: Date;
+    endDate?: Date;
   }) {
-    const { companyId, financialYearId, itemId, sourceLocationId, destLocationId, qty, rate = 0, transferredBy, remarks, transactionDate } = data;
+    const where: Record<string, unknown> = {
+      companyId: filters.companyId,
+      financialYearId: filters.financialYearId,
+    };
 
-    if (sourceLocationId === destLocationId) {
-      throw new Error('Source and destination locations cannot be the same');
+    if (filters.itemId) where.itemId = filters.itemId;
+    if (filters.storeId) where.storeId = filters.storeId;
+    if (filters.startDate || filters.endDate) {
+      where.transactionDate = {};
+      if (filters.startDate) (where.transactionDate as Record<string, Date>).gte = filters.startDate;
+      if (filters.endDate) (where.transactionDate as Record<string, Date>).lte = filters.endDate;
     }
 
-    const now = transactionDate || new Date();
-    const transferId = `TRF-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
-
-    const result = await this.prisma.$transaction(async (tx) => {
-      // FIX #2: Atomic balance check — read latest balance inside the same transaction
-      const validation = await validateSufficientStock(tx, companyId, financialYearId, itemId, null, sourceLocationId, qty);
-      if (!validation.sufficient) {
-        throw new Error(`Insufficient stock: ${validation.itemName} has ${validation.available} at source location, requested ${validation.requested}`);
-      }
-
-      const sourceBalance = validation.available;
-      const sourceNewBalance = sourceBalance - qty;
-      const destBalance = await getLatestBalance(tx, companyId, financialYearId, itemId, null, destLocationId);
-      const destNewBalance = destBalance + qty;
-
-      const sourceTxn = {
-        companyId, financialYearId, itemId,
-        locationId: sourceLocationId,
-        transactionType: 'TRANSFER_OUT',
-        transactionDate: now,
-        quantityIn: new Prisma.Decimal(0),
-        quantityOut: new Prisma.Decimal(qty),
-        rate: new Prisma.Decimal(rate),
-        balanceQty: new Prisma.Decimal(sourceNewBalance),
-        refTransferId: transferId,
-        condition: 'GOOD',
-        referenceType: 'Transfer',
-        referenceNo: transferId,
-        remarks: remarks || `Transfer out to location ${destLocationId}`,
-        createdBy: transferredBy,
-      };
-
-      const destTxn = {
-        companyId, financialYearId, itemId,
-        locationId: destLocationId,
-        transactionType: 'TRANSFER_IN',
-        transactionDate: now,
-        quantityIn: new Prisma.Decimal(qty),
-        quantityOut: new Prisma.Decimal(0),
-        rate: new Prisma.Decimal(rate),
-        balanceQty: new Prisma.Decimal(destNewBalance),
-        refTransferId: transferId,
-        condition: 'GOOD',
-        referenceType: 'Transfer',
-        referenceId: null as number | null,
-        referenceNo: transferId,
-        remarks: remarks || `Transfer in from location ${sourceLocationId}`,
-        createdBy: transferredBy,
-      };
-
-      await tx.stockTransaction.createMany({ data: [sourceTxn, destTxn] });
-
-      // FIX #4: If backdated, recalculate all subsequent balances
-      await this.recalculateBalancesAfterInsert(tx, companyId, financialYearId, itemId, null, sourceLocationId, now);
-      await this.recalculateBalancesAfterInsert(tx, companyId, financialYearId, itemId, null, destLocationId, now);
-
-      // FIX #9: Close out any active asset installations at the source location
-      await this.closeAssetInstallations(tx, companyId, itemId, sourceLocationId, now, transferredBy, `Stock transferred to location ${destLocationId}`);
-
-      await tx.auditLog.create({
-        data: {
-          companyId,
-          action: 'TRANSFER',
-          tableName: 'StockTransaction',
-          description: `Transfer ${qty} of item ${itemId} from location ${sourceLocationId} to ${destLocationId}`,
-          oldValues: JSON.stringify({ sourceLocationId, sourceBalance }),
-          newValues: JSON.stringify({ destLocationId, sourceNewBalance, destNewBalance, transferId }),
-        },
-      });
-
-      return { transferId, sourceNewBalance, destNewBalance };
+    return this.prisma.ledgerEntry.findMany({
+      where,
+      include: {
+        item: true,
+        store: true,
+        transaction: true,
+      },
+      orderBy: [{ transactionDate: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+      take: filters.pageSize || 200,
+      skip: filters.page ? (filters.page - 1) * (filters.pageSize || 200) : 0,
     });
-
-    return result;
   }
 
-  /**
-   * FIX #2: Atomic balance check for damage entry.
-   * FIX #9: Closes out asset installations at the damaged location.
-   */
-  async createDamageEntry(data: {
-    companyId: number;
-    financialYearId: number;
-    itemId: number;
-    locationId: number;
-    qty: number;
-    targetStoreLocationId: number;
-    rate?: number;
-    reportedBy: string;
-    reason: string;
-    remarks?: string;
-    transactionDate?: Date;
-  }) {
-    const { companyId, financialYearId, itemId, locationId, qty, targetStoreLocationId, rate = 0, reportedBy, reason, remarks, transactionDate } = data;
-
-    const now = transactionDate || new Date();
-    const damageId = `DMG-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
-
-    const result = await this.prisma.$transaction(async (tx) => {
-      // FIX #2: Atomic balance check inside the transaction
-      const validation = await validateSufficientStock(tx, companyId, financialYearId, itemId, null, locationId, qty);
-      if (!validation.sufficient) {
-        throw new Error(`Insufficient stock: ${validation.itemName} has ${validation.available} at location ${locationId}, requested ${validation.requested}`);
-      }
-
-      const locationBalance = validation.available;
-      const locationNewBalance = locationBalance - qty;
-      const storeBalance = await getLatestBalance(tx, companyId, financialYearId, itemId, null, targetStoreLocationId);
-      const storeNewBalance = storeBalance + qty;
-
-      const damageOutTxn = {
-        companyId, financialYearId, itemId,
-        locationId,
-        transactionType: 'DAMAGE_OUT',
-        transactionDate: now,
-        quantityIn: new Prisma.Decimal(0),
-        quantityOut: new Prisma.Decimal(qty),
-        rate: new Prisma.Decimal(rate),
-        balanceQty: new Prisma.Decimal(locationNewBalance),
-        condition: 'GOOD',
-        referenceType: 'DamageEntry',
-        referenceId: null as number | null,
-        referenceNo: damageId,
-        remarks: remarks || `Damage: ${reason}`,
-        createdBy: reportedBy,
-      };
-
-      const damageTransferInTxn = {
-        companyId, financialYearId, itemId,
-        locationId: targetStoreLocationId,
-        transactionType: 'DAMAGE_TRANSFER_IN',
-        transactionDate: now,
-        quantityIn: new Prisma.Decimal(qty),
-        quantityOut: new Prisma.Decimal(0),
-        rate: new Prisma.Decimal(rate),
-        balanceQty: new Prisma.Decimal(storeNewBalance),
-        condition: 'DAMAGED',
-        referenceType: 'DamageEntry',
-        referenceNo: damageId,
-        remarks: remarks || `Damaged item from location ${locationId}`,
-        createdBy: reportedBy,
-      };
-
-      await tx.damageEntry.create({
-        data: {
-          companyId, itemId, locationId, date: now, quantity: qty,
-          reason, reportedBy, remarks, status: 'Posted',
-        },
-      });
-
-      await tx.stockTransaction.createMany({ data: [damageOutTxn, damageTransferInTxn] });
-
-      // FIX #4: Recalculate balances if backdated
-      await this.recalculateBalancesAfterInsert(tx, companyId, financialYearId, itemId, null, locationId, now);
-      await this.recalculateBalancesAfterInsert(tx, companyId, financialYearId, itemId, null, targetStoreLocationId, now);
-
-      // FIX #9: Close out active asset installations at the damaged location
-      await this.closeAssetInstallations(tx, companyId, itemId, locationId, now, reportedBy, `Item damaged: ${reason}`);
-
-      await tx.auditLog.create({
-        data: {
-          companyId,
-          action: 'DAMAGE',
-          tableName: 'StockTransaction',
-          description: `Damage ${qty} of item ${itemId} at location ${locationId}, moved to store ${targetStoreLocationId}`,
-          oldValues: JSON.stringify({ locationId, locationBalance }),
-          newValues: JSON.stringify({ targetStoreLocationId, locationNewBalance, storeNewBalance, damageId }),
-        },
-      });
-
-      return { damageId, locationNewBalance, storeNewBalance };
-    });
-
-    return result;
-  }
-
-  async createReplacement(data: {
-    companyId: number;
-    financialYearId: number;
-    itemId: number;
-    damagedLocationId: number;
-    replacementLocationId: number;
-    qty: number;
-    sourceStoreLocationId: number;
-    rate?: number;
-    replacedBy: string;
-    remarks?: string;
-  }) {
-    const { companyId, financialYearId, itemId, damagedLocationId, replacementLocationId, qty, sourceStoreLocationId, rate = 0, replacedBy, remarks } = data;
-
-    const storeBalance = await this.getBalance(companyId, financialYearId, itemId, null, sourceStoreLocationId);
-    if (storeBalance < qty) {
-      const item = await this.prisma.item.findUnique({ where: { id: itemId } });
-      throw new Error(`Insufficient stock: ${item?.itemName || 'Unknown'} has ${storeBalance} at store ${sourceStoreLocationId}, requested ${qty}`);
-    }
-
-    const transferResult = await this.createTransfer({
-      companyId, financialYearId, itemId,
-      sourceLocationId: sourceStoreLocationId,
-      destLocationId: replacementLocationId,
-      qty, rate, transferredBy: replacedBy,
-      remarks: remarks || `Replacement for damaged item at location ${damagedLocationId}`,
-    });
-
-    return { ...transferResult, damagedLocationId };
-  }
-
-  /**
-   * FIX #4: After inserting a potentially backdated transaction, recalculate
-   * balanceQty for all rows at the same item+location, starting from the
-   * inserted row onwards. Ordered by (transactionDate, id) for chronological consistency.
-   */
-  private async recalculateBalancesAfterInsert(
-    tx: Prisma.TransactionClient,
+  async getLedgerBalance(
     companyId: number,
     financialYearId: number,
     itemId: number,
-    departmentId: number | null,
-    locationId: number | null,
-    insertedDate: Date,
-  ): Promise<void> {
-    return recalculateBalancesAfterInsert(tx, companyId, financialYearId, itemId, departmentId, locationId, insertedDate);
+    storeId: number,
+  ): Promise<number> {
+    return this.stockEngine.getStockBalance(companyId, financialYearId, itemId, storeId);
   }
 
-  /**
-   * FIX #9: Close out active asset installations when stock moves away.
-   * Called when TRANSFER_OUT or DAMAGE_OUT is created for an item+location.
-   */
-  private async closeAssetInstallations(
-    tx: Prisma.TransactionClient,
-    companyId: number,
-    itemId: number,
-    locationId: number,
-    closedDate: Date,
-    closedBy: string,
-    reason: string,
-  ): Promise<void> {
-    const activeInstallations = await tx.assetInstallation.findMany({
-      where: {
-        itemId,
-        locationId,
-        status: 'Active',
+  async getLedgerByItem(companyId: number, financialYearId: number, itemId: number, page?: number, pageSize?: number) {
+    return this.prisma.ledgerEntry.findMany({
+      where: { companyId, financialYearId, itemId },
+      include: {
+        item: true,
+        store: true,
+        transaction: true,
       },
+      orderBy: [{ transactionDate: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+      take: pageSize || 200,
+      skip: page ? (page - 1) * (pageSize || 200) : 0,
+    });
+  }
+
+  async getLedgerByStore(companyId: number, financialYearId: number, storeId: number, page?: number, pageSize?: number) {
+    return this.prisma.ledgerEntry.findMany({
+      where: { companyId, financialYearId, storeId },
+      include: {
+        item: true,
+        store: true,
+        transaction: true,
+      },
+      orderBy: [{ transactionDate: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+      take: pageSize || 200,
+      skip: page ? (page - 1) * (pageSize || 200) : 0,
+    });
+  }
+
+  async getRoomStock(
+    companyId: number,
+    financialYearId: number,
+    itemId: number,
+    storeId: number,
+    locationId: number,
+  ): Promise<number> {
+    const result = await this.prisma.ledgerEntry.aggregate({
+      where: {
+        companyId,
+        financialYearId,
+        itemId,
+        storeId,
+        locationId,
+      },
+      _sum: { quantityIn: true, quantityOut: true },
+    });
+    return Number(result._sum.quantityIn || 0) - Number(result._sum.quantityOut || 0);
+  }
+
+  async getRoomStockByStore(
+    companyId: number,
+    financialYearId: number,
+    storeId: number,
+  ) {
+    return this.prisma.ledgerEntry.groupBy({
+      by: ['itemId', 'locationId'],
+      where: {
+        companyId,
+        financialYearId,
+        storeId,
+        locationId: { not: null },
+      },
+      _sum: { quantityIn: true, quantityOut: true },
+    });
+  }
+
+  async getItemHistory(companyId: number, financialYearId: number, itemId: number) {
+    const entries = await this.prisma.ledgerEntry.findMany({
+      where: { companyId, financialYearId, itemId },
+      include: {
+        item: true,
+        store: true,
+        transaction: { include: { department: true, fromStore: true, toStore: true } },
+        location: true,
+      },
+      orderBy: [{ transactionDate: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
     });
 
-    for (const installation of activeInstallations) {
-      await tx.assetInstallation.update({
-        where: { id: installation.id },
-        data: {
-          status: 'Inactive',
-          remarks: `${reason} (closed on ${closedDate.toISOString().split('T')[0]} by ${closedBy})`,
-        },
-      });
+    return entries.map((entry) => ({
+      id: entry.id,
+      uuid: entry.uuid,
+      voucherNo: entry.voucherNo,
+      voucherType: entry.voucherType,
+      movementType: entry.movementType,
+      quantityIn: Number(entry.quantityIn),
+      quantityOut: Number(entry.quantityOut),
+      balanceQty: Number(entry.balanceQty),
+      rate: Number(entry.rate),
+      condition: entry.condition,
+      serialNumber: entry.serialNumber,
+      batchNumber: entry.batchNumber,
+      transactionDate: entry.transactionDate,
+      createdBy: entry.createdBy,
+      itemName: entry.item?.itemName,
+      itemCode: entry.item?.itemCode,
+      storeName: entry.store?.name,
+      locationId: entry.locationId,
+      locationName: entry.location?.name || null,
+      departmentId: entry.transaction?.departmentId || null,
+      departmentName: entry.transaction?.department?.name || null,
+      unitId: entry.item?.unitId || null,
+      transactionId: entry.transactionId,
+      remarks: entry.transaction?.remarks || null,
+    }));
+  }
 
-      await tx.auditLog.create({
-        data: {
-          companyId,
-          action: 'UPDATE',
-          tableName: 'AssetInstallation',
-          recordId: installation.id,
-          description: `Asset installation #${installation.id} deactivated: ${reason}`,
-          oldValues: JSON.stringify({ status: 'Active' }),
-          newValues: JSON.stringify({ status: 'Inactive', closedDate }),
-        },
-      });
+  async getItemHistoryPaginated(
+    companyId: number,
+    financialYearId: number,
+    itemId: number,
+    filters: {
+      storeId?: number;
+      locationId?: number;
+      departmentId?: number;
+      startDate?: Date;
+      endDate?: Date;
+      voucherType?: string;
+      movementType?: string;
+      page?: number;
+      pageSize?: number;
+    },
+  ) {
+    const page = filters.page || 1;
+    const pageSize = Math.min(filters.pageSize || 50, 100);
+
+    const where: Record<string, unknown> = {
+      companyId,
+      financialYearId,
+      itemId,
+    };
+    if (filters.storeId) where.storeId = filters.storeId;
+    if (filters.locationId) where.locationId = filters.locationId;
+    if (filters.voucherType) where.voucherType = filters.voucherType;
+    if (filters.movementType) where.movementType = filters.movementType;
+    if (filters.departmentId) {
+      where.transaction = { departmentId: filters.departmentId };
     }
+    if (filters.startDate || filters.endDate) {
+      where.transactionDate = {};
+      if (filters.startDate) (where.transactionDate as Record<string, Date>).gte = filters.startDate;
+      if (filters.endDate) (where.transactionDate as Record<string, Date>).lte = filters.endDate;
+    }
+
+    const [data, total] = await Promise.all([
+      this.prisma.ledgerEntry.findMany({
+        where,
+        include: {
+          item: true,
+          store: true,
+          transaction: { include: { department: true, fromStore: true, toStore: true } },
+          location: true,
+        },
+        orderBy: [{ transactionDate: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+      this.prisma.ledgerEntry.count({ where }),
+    ]);
+
+    return {
+      data: data.map((entry) => ({
+        id: entry.id,
+        uuid: entry.uuid,
+        voucherNo: entry.voucherNo,
+        voucherType: entry.voucherType,
+        movementType: entry.movementType,
+        quantityIn: Number(entry.quantityIn),
+        quantityOut: Number(entry.quantityOut),
+        balanceQty: Number(entry.balanceQty),
+        rate: Number(entry.rate),
+        condition: entry.condition,
+        serialNumber: entry.serialNumber,
+        batchNumber: entry.batchNumber,
+        transactionDate: entry.transactionDate,
+        createdBy: entry.createdBy,
+        itemName: entry.item?.itemName,
+        itemCode: entry.item?.itemCode,
+        storeName: entry.store?.name,
+        locationId: entry.locationId,
+        locationName: entry.location?.name || null,
+        departmentId: entry.transaction?.departmentId || null,
+        departmentName: entry.transaction?.department?.name || null,
+        unitId: entry.item?.unitId || null,
+        unitName: (entry.item as any)?.unit?.name || null,
+        transactionId: entry.transactionId,
+        remarks: entry.transaction?.remarks || null,
+      })),
+      total,
+      page,
+      pageSize,
+      totalPages: Math.ceil(total / pageSize),
+    };
+  }
+
+  async auditNegativeBalances(companyId: number, financialYearId: number) {
+    const negatives = await this.prisma.ledgerEntry.findMany({
+      where: {
+        companyId,
+        financialYearId,
+        balanceQty: { lt: 0 },
+      },
+      include: { item: true, store: true },
+      orderBy: [{ transactionDate: 'asc' }, { id: 'asc' }],
+    });
+
+    const pairs = [...new Map(negatives.map((e) => [`${e.itemId}-${e.storeId}`, { itemId: e.itemId, storeId: e.storeId }])).values()];
+    const aggregates = await Promise.all(pairs.map((p) => this.prisma.ledgerEntry.aggregate({
+      where: { companyId, financialYearId, itemId: p.itemId, storeId: p.storeId },
+      _sum: { quantityIn: true, quantityOut: true },
+    })));
+    const balanceMap = new Map(aggregates.map((a, i) => [
+      `${pairs[i].itemId}-${pairs[i].storeId}`,
+      Number(a._sum.quantityIn || 0) - Number(a._sum.quantityOut || 0),
+    ]));
+
+    return negatives.map((entry) => ({
+      ledgerId: entry.id,
+      itemCode: entry.item?.itemCode,
+      itemName: entry.item?.itemName,
+      storeName: entry.store?.name,
+      transactionDate: entry.transactionDate,
+      voucherNo: entry.voucherNo,
+      quantityIn: Number(entry.quantityIn),
+      quantityOut: Number(entry.quantityOut),
+      oldBalanceQty: Number(entry.balanceQty),
+      correctFinalBalance: balanceMap.get(`${entry.itemId}-${entry.storeId}`) || 0,
+    }));
+  }
+
+  async repairRunningBalances(companyId: number, financialYearId: number) {
+    const affectedPairs = await this.prisma.ledgerEntry.groupBy({
+      by: ['itemId', 'storeId'],
+      where: { companyId, financialYearId },
+    });
+
+    // Rebuild CurrentStockBalance for affected pairs (replaces O(N²) running balance recalc)
+    const csb = new StockBalanceService(this.prisma);
+
+    let repairedCount = 0;
+    for (const pair of affectedPairs) {
+      // Delete existing CSB for this pair and rebuild from ledger
+      await this.prisma.$executeRawUnsafe(
+        'DELETE FROM CurrentStockBalance WHERE companyId = ? AND financialYearId = ? AND storeId = ? AND itemId = ?',
+        companyId, financialYearId, pair.storeId, pair.itemId
+      );
+
+      const entries = await this.prisma.$queryRawUnsafe<any[]>(
+        `SELECT itemId, storeId, locationId, movementType, CAST(quantityIn AS TEXT) as quantityIn, CAST(quantityOut AS TEXT) as quantityOut, CAST(rate AS TEXT) as rate
+         FROM LedgerEntry WHERE companyId = ? AND financialYearId = ? AND itemId = ? AND storeId = ?
+         ORDER BY transactionDate ASC, createdAt ASC, id ASC`,
+        companyId, financialYearId, pair.itemId, pair.storeId
+      );
+
+      let av = 0, inst = 0, dmg = 0, rep = 0, scr = 0, tv = 0;
+      for (const e of entries) {
+        const d = csb.computeDelta(e.movementType, Number(e.quantityIn), Number(e.quantityOut), e.locationId);
+        av += d.availableDelta; inst += d.installedDelta; dmg += d.damagedDelta;
+        rep += d.repairDelta; scr += d.scrapDelta;
+        tv += (Number(e.quantityIn) - Number(e.quantityOut)) * Number(e.rate || 0);
+      }
+
+      await this.prisma.$executeRawUnsafe(
+        `INSERT INTO CurrentStockBalance (companyId, financialYearId, storeId, itemId, availableQty, installedQty, damagedQty, repairQty, scrapQty, totalValue)
+         VALUES (?, ?, ?, ?, MAX(0,?), MAX(0,?), MAX(0,?), MAX(0,?), MAX(0,?), MAX(0,?))`,
+        companyId, financialYearId, pair.storeId, pair.itemId, av, inst, dmg, rep, scr, tv
+      );
+      repairedCount++;
+    }
+    return { repairedCount, pairsProcessed: affectedPairs.length };
   }
 }

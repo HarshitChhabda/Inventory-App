@@ -1,485 +1,334 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState } from 'react';
 import {
   Box, Typography, Button, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, Paper, Chip, Stack, TextField, TablePagination,
-  IconButton, Tooltip, Dialog, DialogTitle, DialogContent, DialogActions,
-  alpha, useTheme, Grid, Divider, CircularProgress,
+  IconButton, Tooltip, alpha, useTheme,
 } from '@mui/material';
-import { Add, Visibility, CheckCircle, Cancel, Search, Assignment, Edit, Delete, Close } from '@mui/icons-material';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
-import { useCompany } from '../../../context/CompanyContext';
-import { useAuth } from '../../../context/AuthContext';
+import { Add, Visibility, CheckCircle, Cancel, Search, Assignment, Edit, Delete, Outbox, Refresh } from '@mui/icons-material';
 import PageHeader from '../../../components/PageHeader';
 import EmptyState from '../../../components/EmptyState';
+import { PageLoader } from '../../../components/LoadingSkeleton';
+import EnterpriseDialog from '../../../components/EnterpriseDialog';
+import ConfirmDialog from '../../../components/ConfirmDialog';
+import StatusBadge from '../../../components/StatusBadge';
+import TransactionViewPopup from '../../../components/TransactionViewPopup';
+import { GuideButton } from '../../../components/GuideSystem';
 import ImportExportButtons from '../../../components/ImportExportButtons';
-import { formatDateDDMMYYYY, formatDateTimeDDMMYYYY, parseDateDDMMYYYY } from '../../../utils/dateUtils';
+import ImportProgressDialog, { getInitialProgress, ImportProgress } from '../../../components/ImportProgressDialog';
+import { formatDateDDMMYYYY, normalizeDate } from '../../../utils/dateUtils';
+import { useChallanList } from '../hooks/useChallanList';
 import toast from 'react-hot-toast';
 
+const STATUS_FILTERS = ['All', 'DRAFT', 'POSTED', 'CANCELLED'] as const;
+
 export default function IssueChallanList() {
-  const { company, financialYear } = useCompany();
-  const { hasPermission } = useAuth();
-  const navigate = useNavigate();
-  const queryClient = useQueryClient();
-  const theme = useTheme();
-  const [page, setPage] = useState(0);
-  const [rowsPerPage, setRowsPerPage] = useState(50);
-  const [search, setSearch] = useState('');
-  const [debouncedSearch, setDebouncedSearch] = useState('');
-  const debounceTimer = useRef<ReturnType<typeof setTimeout>>();
-  const [statusFilter, setStatusFilter] = useState('');
-  const [cancelDialog, setCancelDialog] = useState<{ open: boolean; id: number | null }>({ open: false, id: null });
-  const [cancelReason, setCancelReason] = useState('');
-  const [deleteDialog, setDeleteDialog] = useState<{ open: boolean; id: number | null; challanNo: string }>({ open: false, id: null, challanNo: '' });
-  const [viewDialog, setViewDialog] = useState<{ open: boolean; data: any }>({ open: false, data: null });
-
-  const exportColumns = [
-    { header: 'Serial Number', key: 'serialNo' },
-    { header: 'Date', key: 'date' },
-    { header: 'From Store', key: 'sourceStore' },
-    { header: 'To Department', key: 'department' },
-    { header: 'Items Count', key: 'itemsCount' },
-    { header: 'Issued By', key: 'issuedBy' },
-    { header: 'Status', key: 'status' },
-  ];
-
-  const { data: allIssueChallans } = useQuery({
-    queryKey: ['issueChallans', company?.id, financialYear?.id, 'all'],
-    queryFn: () => window.electronAPI.dbQuery('issueChallan', 'findMany', {
-      where: { companyId: company!.id, financialYearId: financialYear!.id },
-      include: { department: true, sourceStore: true, items: { include: { item: true, unit: true, location: true } } },
-      orderBy: { date: 'desc' },
+  const c = useChallanList({
+    queryKey: 'issueChallans',
+    listKey: 'issue-challans',
+    model: 'issueChallan',
+    include: { department: true, sourceStore: true, fromStore: true, toStore: true, items: { include: { item: { include: { unit: true } } } } },
+    searchFields: ['voucherNo', 'purpose'],
+    newRoute: '/inventory/issue-challan/new',
+    postFn: (id) => window.electronAPI.postIssueChallan(id),
+    deleteFn: (id) => window.electronAPI.deleteIssueChallan(id),
+    cancelFn: (id, reason) => window.electronAPI.cancelIssueChallan(id, reason),
+    voucherTypeFilter: ['OB', 'IC'],
+    exportColumns: [
+      { header: 'Voucher No', key: 'voucherNo' },
+      { header: 'Date', key: 'date' },
+      { header: 'Department', key: 'department' },
+      { header: 'Store', key: 'storeName' },
+      { header: 'Issued By', key: 'issuedBy' },
+      { header: 'Items Count', key: 'itemsCount' },
+      { header: 'Status', key: 'status' },
+    ],
+    getExportRow: (ic) => ({
+      voucherNo: ic.voucherNo || '-',
+      date: formatDateDDMMYYYY(ic.transactionDate),
+      department: ic.department?.name || ic.toStore?.name || '',
+      storeName: ic.fromStore?.name || ic.toStore?.name || '-',
+      issuedBy: ic.issuedBy || '',
+      itemsCount: ic.items?.length || 0,
+      status: ic.approvalStatus,
     }),
-    enabled: !!company?.id && !!financialYear?.id,
-    refetchOnMount: true,
+    statusFilter: true,
   });
 
-  const getExportData = () => (allIssueChallans || []).map((ic: any) => ({
-    serialNo: ic.serialNo || ic.challanNo,
-    date: formatDateDDMMYYYY(ic.date),
-    sourceStore: ic.sourceStore?.name || '',
-    department: ic.department?.name || '',
-    itemsCount: ic.items?.length || 0,
-    issuedBy: ic.issuedBy || '',
-    status: ic.status,
-  }));
+  const { items, viewDlg, setViewDlg, delDlg, setDelDlg, cancelDlg, setCancelDlg, statusFilter, onStatusFilter, isLoading, isError, refetch } = c;
+  const viewData = viewDlg.data;
+  const [importProgress, setImportProgress] = useState<ImportProgress>(getInitialProgress);
 
-  useEffect(() => {
-    clearTimeout(debounceTimer.current);
-    debounceTimer.current = setTimeout(() => { setDebouncedSearch(search); setPage(0); }, 500);
-    return () => clearTimeout(debounceTimer.current);
-  }, [search]);
-
-  const { data, isLoading } = useQuery({
-    queryKey: ['issueChallans', company?.id, financialYear?.id, page, rowsPerPage, debouncedSearch, statusFilter],
-    queryFn: async () => {
-      const api = window.electronAPI;
-      const where: any = { companyId: company!.id, financialYearId: financialYear!.id };
-      if (debouncedSearch) where.OR = [{ challanNo: { contains: debouncedSearch } }, { purpose: { contains: debouncedSearch } }];
-      if (statusFilter) where.status = statusFilter;
-
-      const [data, total] = await Promise.all([
-        api.dbQuery('issueChallan', 'findMany', {
-          where,
-          include: { department: true, sourceStore: true, items: { include: { item: true, unit: true, location: true } } },
-          skip: page * rowsPerPage,
-          take: rowsPerPage,
-          orderBy: { date: 'desc' },
-        }),
-        api.dbQuery('issueChallan', 'count', { where }),
-      ]);
-      return { data, total };
-    },
-    enabled: !!company?.id && !!financialYear?.id,
-    refetchOnMount: true,
-  });
-
-  const handleImportIssues = async (rows: any[]) => {
-    try {
-      let created = 0, skipped = 0;
-      for (const row of rows) {
-        const challanNo = row['Challan No'] || row['challanNo'] || '';
-        if (!challanNo) { skipped++; continue; }
-        await window.electronAPI.createIssueChallanImport({
-          challanNo, companyId: company!.id, financialYearId: financialYear!.id,
-          date: (() => { const raw = row['Date'] || row['date'] || ''; const d = parseDateDDMMYYYY(raw); return d || new Date(); })(),
+  const handleImport = async (rows: any[]) => {
+    const grouped = rows.reduce((acc: any, row: any) => {
+      const challanNo = row['Challan No'] || row['challanNo'] || row['Voucher No'] || row['voucherNo'] || '';
+      if (!challanNo) return acc;
+      if (!acc[challanNo]) {
+        acc[challanNo] = {
+          challanNo,
+          date: row['Date'] || row['date'] || '',
           issuedBy: row['Issued By'] || row['issuedBy'] || '',
           status: row['Status'] || row['status'] || 'Draft',
+          purpose: row['Purpose'] || row['purpose'] || '',
+          storeName: row['Store'] || row['storeName'] || '',
+          department: row['Department'] || row['department'] || '',
+          items: []
+        };
+      }
+      if (row['Item Code'] || row['itemCode'] || row['Item Name'] || row['itemName']) {
+        acc[challanNo].items.push({
+          itemCode: row['Item Code'] || row['itemCode'],
+          itemName: row['Item Name'] || row['itemName'],
+          quantity: row['Quantity'] || row['quantity'] || 1,
+          rate: row['Rate'] || row['rate'] || 0,
+        });
+      }
+      return acc;
+    }, {});
+
+    const entries = Object.entries<any>(grouped);
+    const total = entries.length;
+    let created = 0, skipped = 0;
+    const errors: string[] = [];
+    setImportProgress({ active: true, current: 0, total, created: 0, updated: 0, skipped: 0, errors: [] });
+
+    for (let i = 0; i < entries.length; i++) {
+      const [challanNo, data] = entries[i];
+      if (!challanNo) { skipped++; errors.push(`Row ${i + 1}: Missing challan number`); setImportProgress(prev => ({ ...prev, current: i + 1, skipped, errors })); continue; }
+      const transactionDate = normalizeDate(data.date);
+      if (!transactionDate) {
+        skipped++;
+        errors.push(`${challanNo}: Invalid date`);
+        setImportProgress(prev => ({ ...prev, current: i + 1, skipped, errors }));
+        continue;
+      }
+      try {
+        await window.electronAPI.createIssueChallanImport({
+          challanNo, companyId: c.company!.id, financialYearId: c.financialYear!.id,
+          date: transactionDate, issuedBy: data.issuedBy, status: data.status,
+          purpose: data.purpose, storeName: data.storeName, department: data.department, items: data.items
         });
         created++;
+      } catch (err: any) {
+        skipped++;
+        errors.push(`${challanNo}: ${err.message}`);
       }
-      queryClient.invalidateQueries({ queryKey: ['issueChallans'] });
-      queryClient.invalidateQueries({ queryKey: ['report'] });
-      toast.success(`Import: ${created} created, ${skipped} skipped`);
-    } catch (err: any) { toast.error('Import failed: ' + err.message); }
-  };
-
-  const cancelMutation = useMutation({
-    mutationFn: async ({ id, reason }: { id: number; reason: string }) => {
-      return window.electronAPI.cancelIssueChallan(id, reason);
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['issueChallans'] });
-      queryClient.invalidateQueries({ queryKey: ['stockTransactions'] });
-      queryClient.invalidateQueries({ queryKey: ['stockLedger'] });
-      queryClient.invalidateQueries({ queryKey: ['stockBalance'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard'] });
-      queryClient.invalidateQueries({ queryKey: ['itemHistory'] });
-      queryClient.invalidateQueries({ queryKey: ['locationBalances'] });
-      queryClient.invalidateQueries({ queryKey: ['report'] });
-      queryClient.invalidateQueries({ queryKey: ['buildingIssues'] });
-      queryClient.invalidateQueries({ queryKey: ['roomIssues'] });
-      queryClient.invalidateQueries({ queryKey: ['roomInstallations'] });
-      queryClient.invalidateQueries({ queryKey: ['buildingInstallations'] });
-      setCancelDialog({ open: false, id: null });
-      setCancelReason('');
-    },
-    onError: (err: any) => { toast.error(err.message || 'Failed to cancel challan'); },
-  });
-
-  const deleteMutation = useMutation({
-    mutationFn: async (id: number) => {
-      return window.electronAPI.deleteIssueChallan(id);
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['issueChallans'] });
-      queryClient.invalidateQueries({ queryKey: ['stockTransactions'] });
-      queryClient.invalidateQueries({ queryKey: ['stockLedger'] });
-      queryClient.invalidateQueries({ queryKey: ['stockBalance'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard'] });
-      queryClient.invalidateQueries({ queryKey: ['itemHistory'] });
-      queryClient.invalidateQueries({ queryKey: ['locationBalances'] });
-      queryClient.invalidateQueries({ queryKey: ['report'] });
-      queryClient.invalidateQueries({ queryKey: ['buildingIssues'] });
-      queryClient.invalidateQueries({ queryKey: ['roomIssues'] });
-      queryClient.invalidateQueries({ queryKey: ['roomInstallations'] });
-      queryClient.invalidateQueries({ queryKey: ['buildingInstallations'] });
-      setDeleteDialog({ open: false, id: null, challanNo: '' });
-      toast.success('Challan deleted successfully');
-    },
-    onError: (err: any) => { toast.error(err.message || 'Failed to delete challan'); },
-  });
-
-  const statusColor = (s: string) => {
-    switch (s) {
-      case 'Draft': return 'warning';
-      case 'Posted': return 'success';
-      case 'Cancelled': return 'error';
-      default: return 'default';
+      setImportProgress(prev => ({ ...prev, current: i + 1, created, skipped, errors }));
     }
+    setImportProgress(prev => ({ ...prev, active: false }));
+    toast.success(`Import: ${created} created, ${skipped} skipped`);
+    c.refetch();
   };
+
+  if (isLoading) return <PageLoader message="Loading challans..." />;
+
+  if (isError) {
+    return (
+      <Box display="flex" flexDirection="column" justifyContent="center" alignItems="center" minHeight="40vh" gap={2}>
+        <Typography variant="h6" color="error" fontWeight={600}>Failed to load data</Typography>
+        <Typography variant="body2" color="text.secondary">Please check your connection and try again.</Typography>
+        <IconButton onClick={() => refetch()} sx={{ border: '1px solid', borderColor: 'divider' }}>
+          <Refresh />
+        </IconButton>
+      </Box>
+    );
+  }
 
   return (
     <Box>
       <PageHeader
-        title="Issue Challans (Kharch)"
-        subtitle="Track outgoing material issues"
+        title="Store Issue"
+        subtitle="Issue material from one store to another store or location"
         actions={
           <Stack direction="row" spacing={1.5} alignItems="center">
-            <ImportExportButtons
-              data={getExportData()}
-              columns={exportColumns}
-              fileName="issue-challans"
-              onImport={handleImportIssues}
-            />
-            <Button variant="contained" startIcon={<Add />} onClick={() => navigate('/inventory/issue-challan/new')}>
-              New Issue Challan
-            </Button>
+            <GuideButton pageId="issue-challan" />
+            <ImportExportButtons data={c.getExportData()} columns={c.exportColumns} fileName="issue-challans" onImport={handleImport} />
+            <Button variant="contained" startIcon={<Add />} onClick={() => c.navigate(c.newRoute)}>New Store Issue</Button>
           </Stack>
         }
       />
 
       <Paper sx={{ p: 2, mb: 2 }}>
-        <Stack direction="row" spacing={2}>
+        <Stack direction="row" spacing={2} alignItems="center">
           <TextField
-            placeholder="Search challan..."
-            value={search}
-            onChange={(e) => { setSearch(e.target.value); setPage(0); }}
+            placeholder="Search challans..."
+            value={c.search}
+            onChange={(e) => c.onSearch(e.target.value)}
             InputProps={{ startAdornment: <Search sx={{ mr: 1, color: 'text.secondary' }} /> }}
             size="small"
             sx={{ flex: 1 }}
           />
-          <TextField
-            select
-            size="small"
-            value={statusFilter}
-            onChange={(e) => { setStatusFilter(e.target.value); setPage(0); }}
-            sx={{ minWidth: 150 }}
-            SelectProps={{ native: true }}
-          >
-            <option value="">All Status</option>
-            <option value="Draft">Draft</option>
-            <option value="Posted">Posted</option>
-            <option value="Cancelled">Cancelled</option>
-          </TextField>
+          <Stack direction="row" spacing={0.5}>
+            {STATUS_FILTERS.map((s) => (
+              <Chip
+                key={s}
+                label={s}
+                size="small"
+                clickable
+                color={statusFilter === s || (s === 'All' && !statusFilter) ? 'primary' : 'default'}
+                variant={statusFilter === s || (s === 'All' && !statusFilter) ? 'filled' : 'outlined'}
+                onClick={() => onStatusFilter(s === 'All' ? '' : s)}
+                sx={{ fontWeight: 500 }}
+              />
+            ))}
+          </Stack>
         </Stack>
       </Paper>
 
       <TableContainer component={Paper}>
         <Table size="small">
           <TableHead>
-            <TableRow>
-              <TableCell>Serial Number</TableCell>
-              <TableCell>Date</TableCell>
-              <TableCell>From Store</TableCell>
-              <TableCell>To Department</TableCell>
-              <TableCell>Items</TableCell>
-              <TableCell>Room</TableCell>
-              <TableCell>Issued By</TableCell>
-              <TableCell>Posted At</TableCell>
-              <TableCell>Status</TableCell>
-              <TableCell align="right">Actions</TableCell>
+            <TableRow sx={{ bgcolor: alpha(useTheme().palette.primary.main, 0.05) }}>
+              <TableCell sx={{ fontWeight: 700 }}>Voucher No</TableCell>
+              <TableCell sx={{ fontWeight: 700 }}>Date</TableCell>
+              <TableCell sx={{ fontWeight: 700 }}>Demand No</TableCell>
+              <TableCell sx={{ fontWeight: 700 }}>Department</TableCell>
+              <TableCell sx={{ fontWeight: 700 }}>Store</TableCell>
+              <TableCell sx={{ fontWeight: 700 }}>Issued By</TableCell>
+              <TableCell sx={{ fontWeight: 700 }}>Items</TableCell>
+              <TableCell sx={{ fontWeight: 700 }}>Status</TableCell>
+              <TableCell sx={{ fontWeight: 700 }} align="right">Actions</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
-            {data?.data?.map((ic: any) => (
+            {items.map((ic: any) => (
               <TableRow key={ic.id} hover>
                 <TableCell>
-                  <Chip label={ic.serialNo || ic.challanNo} size="small" color="secondary" variant="outlined" sx={{ fontWeight: 600, fontFamily: 'monospace' }} />
+                  <Chip label={ic.voucherNo || '-'} size="small" color="secondary" variant="outlined" sx={{ fontWeight: 600, fontFamily: 'monospace' }} />
                 </TableCell>
-                <TableCell>{formatDateDDMMYYYY(ic.date)}</TableCell>
-                <TableCell>{ic.sourceStore?.name || '-'}</TableCell>
-                <TableCell>{ic.department?.name}</TableCell>
+                <TableCell>{formatDateDDMMYYYY(ic.transactionDate || ic.createdAt)}</TableCell>
+                <TableCell>
+                  {ic.demandAllocations && ic.demandAllocations.length > 0 ? (
+                    <Chip
+                      label={ic.demandAllocations[0]?.materialDemandItem?.serviceRequest?.physicalDemandNo || ic.demandAllocations[0]?.materialDemandItem?.serviceRequest?.requestNumber || '?'}
+                      size="small"
+                      color="primary"
+                      variant="outlined"
+                      sx={{ fontWeight: 600, fontSize: '0.7rem' }}
+                    />
+                  ) : (
+                    <Typography variant="caption" color="text.secondary">General Issue</Typography>
+                  )}
+                </TableCell>
+                <TableCell>
+                  <Typography fontWeight={500} fontSize="0.8125rem">{ic.department?.name || ic.toStore?.name || '-'}</Typography>
+                </TableCell>
+                <TableCell>
+                  <Typography fontWeight={500} fontSize="0.8125rem">{ic.fromStore?.name || ic.toStore?.name || '-'}</Typography>
+                </TableCell>
+                <TableCell>{ic.issuedBy}</TableCell>
                 <TableCell>
                   <Stack direction="row" spacing={0.5} alignItems="center" flexWrap="wrap">
                     <Chip label={`${ic.items?.length || 0} items`} size="small" sx={{ height: 20, fontSize: '0.65rem', fontWeight: 600 }} />
-                    <Typography variant="caption" color="text.secondary" sx={{ maxWidth: 250, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    <Typography variant="caption" color="text.secondary" sx={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {ic.items?.map((it: any) => it.item?.itemName).filter(Boolean).join(', ')}
                     </Typography>
                   </Stack>
                 </TableCell>
                 <TableCell>
-                  {(() => {
-                    const rooms = ic.items?.map((it: any) => it.location?.locationName).filter(Boolean);
-                    const unique = [...new Set(rooms)];
-                    return unique.length > 0 ? (
-                      <Stack direction="row" spacing={0.5} flexWrap="wrap">
-                        {unique.map((r: any, i: number) => (
-                          <Chip key={i} label={r} size="small" sx={{ height: 20, fontSize: '0.65rem' }} />
-                        ))}
-                      </Stack>
-                    ) : <Typography variant="body2" color="text.secondary">-</Typography>;
-                  })()}
-                </TableCell>
-                <TableCell>{ic.issuedBy}</TableCell>
-                <TableCell>{formatDateTimeDDMMYYYY(ic.postedAt)}</TableCell>
-                <TableCell>
-                  <Chip label={ic.status} size="small" color={statusColor(ic.status) as any} variant="outlined" />
+                  <StatusBadge status={ic.approvalStatus} />
                 </TableCell>
                 <TableCell align="right">
-                  <Tooltip title="View">
-                    <IconButton size="small" onClick={() => setViewDialog({ open: true, data: ic })} sx={{ color: 'text.secondary', '&:hover': { color: 'primary.main' } }}>
-                      <Visibility fontSize="small" />
-                    </IconButton>
+                  <Tooltip title="View Details">
+                    <IconButton size="small" onClick={() => setViewDlg({ open: true, data: ic })} sx={{ color: 'text.secondary', '&:hover': { color: 'primary.main' } }}><Visibility fontSize="small" /></IconButton>
                   </Tooltip>
-                  {ic.status === 'Draft' && (
+                  {ic.approvalStatus === 'DRAFT' && (
                     <>
                       <Tooltip title="Edit">
-                        <IconButton size="small" onClick={() => navigate(`/inventory/issue-challan/${ic.id}`)} sx={{ color: 'text.secondary', '&:hover': { color: 'info.main' } }}>
-                          <Edit fontSize="small" />
-                        </IconButton>
+                        <IconButton size="small" onClick={() => c.navigate(`/inventory/issue-challan/${ic.id}`)} sx={{ color: 'text.secondary', '&:hover': { color: 'info.main' } }}><Edit fontSize="small" /></IconButton>
                       </Tooltip>
-                        <Tooltip title="Post">
-                        <IconButton size="small" color="success" onClick={async () => {
-                          try {
-                            await window.electronAPI.postIssueChallan(ic.id);
-                            await Promise.all([
-                              queryClient.invalidateQueries({ queryKey: ['issueChallans'] }),
-                              queryClient.invalidateQueries({ queryKey: ['stockTransactions'] }),
-                              queryClient.invalidateQueries({ queryKey: ['stockLedger'] }),
-                              queryClient.invalidateQueries({ queryKey: ['stockBalance'] }),
-                              queryClient.invalidateQueries({ queryKey: ['dashboard'] }),
-                              queryClient.invalidateQueries({ queryKey: ['itemHistory'] }),
-                              queryClient.invalidateQueries({ queryKey: ['locationBalances'] }),
-                              queryClient.invalidateQueries({ queryKey: ['report'] }),
-                              queryClient.invalidateQueries({ queryKey: ['buildingIssues'] }),
-                              queryClient.invalidateQueries({ queryKey: ['roomIssues'] }),
-                              queryClient.invalidateQueries({ queryKey: ['roomInstallations'] }),
-                              queryClient.invalidateQueries({ queryKey: ['buildingInstallations'] }),
-                            ]);
-                            toast.success('Challan posted successfully');
-                          } catch (err: any) {
-                            toast.error(err.message || 'Failed to post challan');
-                          }
-                        }}><CheckCircle fontSize="small" /></IconButton>
+                      <Tooltip title="Post">
+                        <IconButton size="small" color="success" onClick={() => c.postMut.mutate(ic.id)}><CheckCircle fontSize="small" /></IconButton>
                       </Tooltip>
-                       {hasPermission('delete_challan') && (
-                       <Tooltip title="Delete">
-                         <IconButton size="small" color="error" onClick={() => setDeleteDialog({ open: true, id: ic.id, challanNo: ic.challanNo })}><Delete fontSize="small" /></IconButton>
-                       </Tooltip>
-                       )}
-                     </>
-                   )}
-                   {ic.status === 'Posted' && (
-                     <>
-                       {hasPermission('delete_challan') && (
-                       <Tooltip title="Delete">
-                         <IconButton size="small" color="error" onClick={() => setDeleteDialog({ open: true, id: ic.id, challanNo: ic.challanNo })}><Delete fontSize="small" /></IconButton>
-                       </Tooltip>
-                       )}
-                       {hasPermission('cancel_challan') && (
-                       <Tooltip title="Cancel">
-                         <IconButton size="small" color="error" onClick={() => setCancelDialog({ open: true, id: ic.id })}><Cancel fontSize="small" /></IconButton>
-                       </Tooltip>
-                       )}
+                      {c.hasPermission('delete_challan') && (
+                        <Tooltip title="Delete">
+                          <IconButton size="small" color="error" onClick={() => setDelDlg({ open: true, id: ic.id, label: ic.voucherNo })}><Delete fontSize="small" /></IconButton>
+                        </Tooltip>
+                      )}
+                    </>
+                  )}
+                  {ic.approvalStatus === 'POSTED' && ic.voucherType !== 'RV' && (
+                    <>
+                      {c.hasPermission('delete_challan') && (
+                        <Tooltip title="Delete">
+                          <IconButton size="small" color="error" onClick={() => setDelDlg({ open: true, id: ic.id, label: ic.voucherNo })}><Delete fontSize="small" /></IconButton>
+                        </Tooltip>
+                      )}
+                      {c.hasPermission('cancel_challan') && (
+                        <Tooltip title="Cancel">
+                          <IconButton size="small" color="error" onClick={() => setCancelDlg({ open: true, id: ic.id })}><Cancel fontSize="small" /></IconButton>
+                        </Tooltip>
+                      )}
                     </>
                   )}
                 </TableCell>
               </TableRow>
             ))}
-            {(!data?.data || data.data.length === 0) && (
-              <TableRow>
-                <TableCell colSpan={10}>
-                  <EmptyState icon={<Assignment />} title="No issue challans" description="Create your first issue challan to track material dispatches" />
-                </TableCell>
-              </TableRow>
+            {items.length === 0 && (
+              <TableRow><TableCell colSpan={7}>                <EmptyState icon={<Assignment />} title="No store issues" description="Create your first store issue to track material dispatches" /></TableCell></TableRow>
             )}
           </TableBody>
         </Table>
       </TableContainer>
 
-      <TablePagination component="div" count={data?.total || 0} page={page} onPageChange={(_, p) => setPage(p)} rowsPerPage={rowsPerPage} onRowsPerPageChange={(e) => { setRowsPerPage(parseInt(e.target.value)); setPage(0); }} rowsPerPageOptions={[25, 50, 100]} />
+      <TablePagination component="div" count={c.total} page={c.page} onPageChange={(_, p) => c.setPage(p)} rowsPerPage={c.rpp} onRowsPerPageChange={(e) => { c.setRpp(parseInt(e.target.value)); c.setPage(0); }} rowsPerPageOptions={[25, 50, 100]} />
 
-      <Dialog open={cancelDialog.open} onClose={() => setCancelDialog({ open: false, id: null })}>
-        <DialogTitle>Cancel Issue Challan</DialogTitle>
-        <DialogContent>
-          <TextField fullWidth multiline rows={3} label="Cancel Reason" value={cancelReason} onChange={(e) => setCancelReason(e.target.value)} sx={{ mt: 1 }} />
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setCancelDialog({ open: false, id: null })}>Close</Button>
-          <Button variant="contained" color="error" onClick={() => cancelDialog.id && cancelMutation.mutate({ id: cancelDialog.id, reason: cancelReason })} disabled={!cancelReason}>Cancel Challan</Button>
-        </DialogActions>
-      </Dialog>
+      <ImportProgressDialog progress={importProgress} onClose={() => setImportProgress(getInitialProgress())} entityLabel="issue challans" />
 
-      <Dialog open={deleteDialog.open} onClose={() => setDeleteDialog({ open: false, id: null, challanNo: '' })}>
-        <DialogTitle>Delete Issue Challan</DialogTitle>
-        <DialogContent>
-          <Typography sx={{ mt: 1 }}>Are you sure you want to delete challan <strong>{deleteDialog.challanNo}</strong>?</Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-            Stock transactions will be reversed automatically. This action cannot be undone.
-          </Typography>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setDeleteDialog({ open: false, id: null, challanNo: '' })}>Cancel</Button>
-          <Button variant="contained" color="error" onClick={() => deleteDialog.id && deleteMutation.mutate(deleteDialog.id)}>Delete</Button>
-        </DialogActions>
-      </Dialog>
+      {/* Cancel Dialog */}
+      <EnterpriseDialog
+        open={cancelDlg.open}
+        onClose={() => setCancelDlg({ open: false, id: null })}
+        title="Cancel Store Issue"
+        subtitle="Provide a reason for cancellation"
+        icon={<Cancel />}
+        maxWidth="xs"
+        actions={
+          <>
+            <Button onClick={() => setCancelDlg({ open: false, id: null })}>Close</Button>
+            <Button variant="contained" color="error" onClick={() => cancelDlg.id && c.cancelMut.mutate({ id: cancelDlg.id, reason: c.cancelReason })} disabled={!c.cancelReason}>Cancel Challan</Button>
+          </>
+        }
+      >
+        <TextField fullWidth multiline rows={3} label="Cancel Reason" value={c.cancelReason} onChange={(e) => c.setCancelReason(e.target.value)} />
+      </EnterpriseDialog>
 
-      {/* View Challan Dialog */}
-      <Dialog open={viewDialog.open} onClose={() => setViewDialog({ open: false, data: null })} maxWidth="md" fullWidth>
-        <DialogTitle sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', pb: 1 }}>
-          <Box>
-            <Typography variant="h6" fontWeight={700}>Issue Challan Details</Typography>
-            <Typography variant="caption" color="text.secondary">{viewDialog.data?.serialNo || viewDialog.data?.challanNo}</Typography>
-          </Box>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <Chip label={viewDialog.data?.status} size="small" color={statusColor(viewDialog.data?.status) as any} />
-            <IconButton onClick={() => setViewDialog({ open: false, data: null })} size="small"><Close fontSize="small" /></IconButton>
-          </Box>
-        </DialogTitle>
-        <DialogContent dividers>
-          {viewDialog.data && (
-            <Stack spacing={2.5}>
-              <Grid container spacing={2}>
-                <Grid item xs={6} md={3}>
-                  <Typography variant="caption" color="text.secondary">Serial Number</Typography>
-                  <Typography fontWeight={600}>{viewDialog.data.serialNo || viewDialog.data.challanNo}</Typography>
-                </Grid>
-                <Grid item xs={6} md={3}>
-                  <Typography variant="caption" color="text.secondary">Date</Typography>
-                  <Typography fontWeight={600}>{formatDateDDMMYYYY(viewDialog.data.date)}</Typography>
-                </Grid>
-                <Grid item xs={6} md={3}>
-                  <Typography variant="caption" color="text.secondary">From Store</Typography>
-                  <Typography fontWeight={600}>{viewDialog.data.sourceStore?.name || '-'}</Typography>
-                </Grid>
-                <Grid item xs={6} md={3}>
-                  <Typography variant="caption" color="text.secondary">Issue To</Typography>
-                  <Typography fontWeight={600}>{viewDialog.data.department?.name || '-'}</Typography>
-                </Grid>
-                <Grid item xs={6} md={3}>
-                  <Typography variant="caption" color="text.secondary">Issued By</Typography>
-                  <Typography fontWeight={600}>{viewDialog.data.issuedBy || '-'}</Typography>
-                </Grid>
-                {viewDialog.data.approvedBy && (
-                  <Grid item xs={6} md={3}>
-                    <Typography variant="caption" color="text.secondary">Approved By</Typography>
-                    <Typography fontWeight={600}>{viewDialog.data.approvedBy}</Typography>
-                  </Grid>
-                )}
-                {viewDialog.data.purpose && (
-                  <Grid item xs={6} md={3}>
-                    <Typography variant="caption" color="text.secondary">Purpose</Typography>
-                    <Typography fontWeight={600}>{viewDialog.data.purpose}</Typography>
-                  </Grid>
-                )}
-                <Grid item xs={6} md={3}>
-                  <Typography variant="caption" color="text.secondary">Status</Typography>
-                  <Box><Chip label={viewDialog.data.status} size="small" color={statusColor(viewDialog.data.status) as any} /></Box>
-                </Grid>
-                {viewDialog.data.postedAt && (
-                  <Grid item xs={6} md={3}>
-                    <Typography variant="caption" color="text.secondary">Posted At</Typography>
-                    <Typography fontWeight={600}>{formatDateTimeDDMMYYYY(viewDialog.data.postedAt)}</Typography>
-                  </Grid>
-                )}
-              </Grid>
+      {/* Delete Dialog */}
+      <ConfirmDialog
+        open={delDlg.open}
+        title="Delete Store Issue"
+        message={
+          <>
+            Are you sure you want to delete challan <strong>{delDlg.label}</strong>?
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+              Stock transactions will be reversed automatically. This action cannot be undone.
+            </Typography>
+          </>
+        }
+        confirmText="Delete"
+        confirmColor="error"
+        onConfirm={() => delDlg.id && c.delMut.mutate(delDlg.id)}
+        onCancel={() => setDelDlg({ open: false, id: null, label: '' })}
+      />
 
-              {viewDialog.data.remarks && (
-                <Box>
-                  <Typography variant="caption" color="text.secondary">Remarks</Typography>
-                  <Typography fontWeight={500}>{viewDialog.data.remarks}</Typography>
-                </Box>
-              )}
-
-              <Divider />
-
-              <Box>
-                <Typography variant="subtitle2" fontWeight={600} mb={1}>Items ({viewDialog.data.items?.length || 0})</Typography>
-                <TableContainer>
-                  <Table size="small">
-                    <TableHead>
-                      <TableRow>
-                        <TableCell>#</TableCell>
-                        <TableCell>Item Name</TableCell>
-                        <TableCell>Unit</TableCell>
-                        <TableCell>Qty</TableCell>
-                        <TableCell>Room</TableCell>
-                        <TableCell>Purpose</TableCell>
-                        <TableCell>Remarks</TableCell>
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {viewDialog.data.items?.map((it: any, idx: number) => (
-                        <TableRow key={idx}>
-                          <TableCell>{idx + 1}</TableCell>
-                          <TableCell>
-                            <Typography fontWeight={500}>{it.item?.itemName || '-'}</Typography>
-                            <Typography variant="caption" color="text.secondary">{it.item?.itemCode}</Typography>
-                          </TableCell>
-                          <TableCell>{it.unit?.name || '-'}</TableCell>
-                          <TableCell>{Number(it.quantity)}</TableCell>
-                          <TableCell>{it.location?.locationName || '-'}</TableCell>
-                          <TableCell>{it.purpose || '-'}</TableCell>
-                          <TableCell>{it.remarks || '-'}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </TableContainer>
-              </Box>
-            </Stack>
-          )}
-        </DialogContent>
-        <DialogActions sx={{ px: 3, py: 1.5 }}>
-          {viewDialog.data?.status === 'Draft' && (
-            <Button variant="contained" startIcon={<Edit />} onClick={() => { setViewDialog({ open: false, data: null }); navigate(`/inventory/issue-challan/${viewDialog.data.id}`); }}>
-              Edit Challan
-            </Button>
-          )}
-          <Button onClick={() => setViewDialog({ open: false, data: null })}>Close</Button>
-        </DialogActions>
-      </Dialog>
+      {/* View Dialog */}
+      <EnterpriseDialog
+        open={viewDlg.open}
+        onClose={() => setViewDlg({ open: false, data: null })}
+        title="Store Issue Details"
+        subtitle={viewData?.voucherNo}
+        icon={<Outbox />}
+        maxWidth="md"
+        actions={
+          <>
+            {viewData?.approvalStatus === 'DRAFT' && <Button variant="contained" startIcon={<Edit />} onClick={() => { setViewDlg({ open: false, data: null }); c.navigate(`/inventory/issue-challan/${viewData.id}`); }}>Edit Challan</Button>}
+            <Button onClick={() => setViewDlg({ open: false, data: null })}>Close</Button>
+          </>
+        }
+      >
+        {viewData && (
+          <TransactionViewPopup type="Issue" data={viewData} />
+        )}
+      </EnterpriseDialog>
     </Box>
   );
 }

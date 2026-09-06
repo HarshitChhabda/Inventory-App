@@ -8,11 +8,18 @@ interface EmptyStateProps {
   description?: string;
   action?: { label: string; onClick: () => void; icon?: React.ReactNode };
   compact?: boolean;
+  size?: 'compact' | 'normal' | 'large';
 }
 
-export default function EmptyState({ icon, title, description, action, compact }: EmptyStateProps) {
+export default function EmptyState({ icon, title, description, action, compact, size }: EmptyStateProps) {
   const theme = useTheme();
   const isDark = theme.palette.mode === 'dark';
+
+  const effectiveSize = size || (compact ? 'compact' : 'normal');
+  const iconSize = effectiveSize === 'large' ? 96 : effectiveSize === 'compact' ? 64 : 80;
+  const iconFontSize = effectiveSize === 'large' ? 44 : effectiveSize === 'compact' ? 28 : 36;
+  const py = effectiveSize === 'large' ? 10 : effectiveSize === 'compact' ? 5 : 8;
+  const titleSize = effectiveSize === 'large' ? '1.125rem' : effectiveSize === 'compact' ? '0.9375rem' : '1.0625rem';
 
   return (
     <Box
@@ -21,7 +28,7 @@ export default function EmptyState({ icon, title, description, action, compact }
         flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
-        py: compact ? 5 : 8,
+        py,
         px: 3,
         textAlign: 'center',
         animation: 'fadeInUp 400ms cubic-bezier(0.16, 1, 0.3, 1) forwards',
@@ -30,9 +37,9 @@ export default function EmptyState({ icon, title, description, action, compact }
     >
       <Box
         sx={{
-          width: compact ? 64 : 80,
-          height: compact ? 64 : 80,
-          borderRadius: '20px',
+          width: iconSize,
+          height: iconSize,
+          borderRadius: effectiveSize === 'large' ? '24px' : '20px',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
@@ -42,7 +49,7 @@ export default function EmptyState({ icon, title, description, action, compact }
           mb: 2.5,
           border: `1px solid ${isDark ? 'rgba(59,130,246,0.15)' : 'rgba(37,99,235,0.1)'}`,
           '& .MuiSvgIcon-root': {
-            fontSize: compact ? 28 : 36,
+            fontSize: iconFontSize,
             color: isDark ? '#60A5FA' : '#2563EB',
           },
         }}
@@ -55,7 +62,7 @@ export default function EmptyState({ icon, title, description, action, compact }
         sx={{
           color: 'text.primary',
           fontWeight: 700,
-          fontSize: compact ? '0.9375rem' : '1.0625rem',
+          fontSize: titleSize,
           letterSpacing: '-0.01em',
         }}
       >

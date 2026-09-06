@@ -1,5 +1,6 @@
 import { Worker } from 'worker_threads';
 import path from 'path';
+import { getLogger } from '../../src/main/services/monitoring/logger.service';
 
 let worker: Worker | null = null;
 let taskIdCounter = 0;
@@ -23,7 +24,7 @@ function getWorker(): Worker {
     });
 
     worker.on('error', (err) => {
-      console.error('[WorkerManager] Worker error:', err);
+      getLogger().error(`[WorkerManager] Worker error: ${err.message}`, 'WorkerManager', undefined, err.stack);
       worker = null;
       pendingTasks.forEach((pending) => {
         pending.reject(err);
@@ -33,7 +34,7 @@ function getWorker(): Worker {
 
     worker.on('exit', (code) => {
       if (code !== 0) {
-        console.error(`[WorkerManager] Worker exited with code ${code}`);
+        getLogger().error(`[WorkerManager] Worker exited with code ${code}`, 'WorkerManager');
       }
       worker = null;
     });

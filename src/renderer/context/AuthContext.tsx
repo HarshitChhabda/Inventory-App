@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, ReactNode } from 'react';
 
 interface User {
   id: number;
@@ -6,6 +6,7 @@ interface User {
   username: string;
   fullName: string;
   role: string;
+  roleId?: number | null;
   permissions: string[];
   isActive: boolean;
   createdAt: string;
@@ -30,22 +31,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
     window.electronAPI
       .getCurrentUser()
-      .then((user) => {
+      .then(async (user: User | null) => {
+        if (!cancelled && user) {
+          try {
+            const rbacPerms = await window.electronAPI.getUserPermissions(user.id);
+            const rbacKeys = rbacPerms.map((p: any) => p.key || p);
+            const existingPerms = Array.isArray(user.permissions) ? user.permissions : [];
+            user.permissions = [...new Set([...existingPerms, ...rbacKeys])];
+          } catch (err) {
+            // RBAC permissions failed to load — user will operate with base permissions only
+            console.warn('Failed to load RBAC permissions:', err);
+          }
+        }
         if (!cancelled) setCurrentUser(user);
       })
-      .catch(() => {
-        if (!cancelled) setCurrentUser(null);
-      })
-      .finally(() => {
-        if (!cancelled) setIsLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
+      .catch(() => { if (!cancelled) setCurrentUser(null); })
+      .finally(() => { if (!cancelled) setIsLoading(false); });
+    return () => { cancelled = true; };
   }, []);
 
   const login = useCallback(async (username: string, password: string) => {
     const user = await window.electronAPI.login(username, password);
+    try {
+      const rbacPerms = await window.electronAPI.getUserPermissions(user.id);
+      const rbacKeys = rbacPerms.map((p: any) => p.key || p);
+      const existingPerms = Array.isArray(user.permissions) ? user.permissions : [];
+      user.permissions = [...new Set([...existingPerms, ...rbacKeys])];
+    } catch (err) {
+      // RBAC permissions failed to load — user will operate with base permissions only
+      console.warn('Failed to load RBAC permissions:', err);
+    }
     setCurrentUser(user);
   }, []);
 
@@ -64,8 +79,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [currentUser],
   );
 
+  const value = useMemo(() => ({ currentUser, isLoading, login, logout, hasPermission }), [currentUser, isLoading, login, logout, hasPermission]);
+
   return (
-    <AuthContext.Provider value={{ currentUser, isLoading, login, logout, hasPermission }}>
+    <AuthContext.Provider value={value}>
       {children}
     </AuthContext.Provider>
   );

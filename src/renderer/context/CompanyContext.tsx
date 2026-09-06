@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useMemo, useCallback, ReactNode } from 'react';
 
 interface Company {
   id: number;
@@ -7,6 +7,7 @@ interface Company {
   address?: string;
   phone?: string;
   logoPath?: string;
+  isActive?: boolean;
 }
 
 interface FinancialYear {
@@ -31,45 +32,30 @@ interface CompanyContextType {
 
 const CompanyContext = createContext<CompanyContextType | undefined>(undefined);
 
+try { localStorage.removeItem('selectedCompany'); localStorage.removeItem('selectedFinancialYear'); } catch {}
+
 export function CompanyProvider({ children }: { children: ReactNode }) {
-  const [company, setCompany] = useState<Company | null>(() => {
-    const saved = localStorage.getItem('selectedCompany');
-    return saved ? JSON.parse(saved) : null;
-  });
-
-  const [financialYear, setFinancialYear] = useState<FinancialYear | null>(() => {
-    const saved = localStorage.getItem('selectedFinancialYear');
-    return saved ? JSON.parse(saved) : null;
-  });
-
+  const [company, setCompanyState] = useState<Company | null>(null);
+  const [financialYear, setFinancialYear] = useState<FinancialYear | null>(null);
   const [companies, setCompanies] = useState<Company[]>([]);
   const [financialYears, setFinancialYears] = useState<FinancialYear[]>([]);
 
-  useEffect(() => {
-    if (company) {
-      localStorage.setItem('selectedCompany', JSON.stringify(company));
-    } else {
-      localStorage.removeItem('selectedCompany');
-    }
-  }, [company]);
+  const setCompany = useCallback((c: Company | null) => {
+    setCompanyState(c);
+    try {
+      window.electronAPI?.setCompanyId?.(c?.id || null);
+    } catch {}
+  }, []);
 
-  useEffect(() => {
-    if (financialYear) {
-      localStorage.setItem('selectedFinancialYear', JSON.stringify(financialYear));
-    } else {
-      localStorage.removeItem('selectedFinancialYear');
-    }
-  }, [financialYear]);
+  const value = useMemo(() => ({
+    company, setCompany,
+    financialYear, setFinancialYear,
+    companies, setCompanies,
+    financialYears, setFinancialYears,
+  }), [company, financialYear, companies, financialYears, setCompany, setFinancialYear, setCompanies, setFinancialYears]);
 
   return (
-    <CompanyContext.Provider
-      value={{
-        company, setCompany,
-        financialYear, setFinancialYear,
-        companies, setCompanies,
-        financialYears, setFinancialYears,
-      }}
-    >
+    <CompanyContext.Provider value={value}>
       {children}
     </CompanyContext.Provider>
   );

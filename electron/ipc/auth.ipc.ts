@@ -12,51 +12,64 @@ import {
   type PermissionKey,
 } from '../../src/main/services/auth.service';
 import type { SafeUser } from '../../src/main/services/auth.service';
+import { SecurityService } from '../../src/main/services/security.service';
+import { AuditService } from '../../src/main/services/audit.service';
 import { serialize } from './helpers';
+import { validate } from './validate';
+import { loginSchema, userSchema } from '../../src/shared/zod-schemas';
 
 export function registerAuthIpc() {
   const prisma = getPrismaClient();
+  const securityService = new SecurityService(prisma);
+  const auditService = new AuditService(prisma);
 
   // ─── Login ──────────────────────────────────────────────────────
   ipcMain.handle('auth:login', async (_event, username: string, password: string) => {
-    if (!username || !password) {
-      throw new Error('Username and password are required');
-    }
+    const input = validate(loginSchema, { username, password });
 
-    const user = await prisma.user.findUnique({ where: { username } });
+    const user = await prisma.user.findUnique({ where: { username: input.username } });
     if (!user) throw new Error('Invalid username or password');
     if (!user.isActive) throw new Error('User account is inactive');
 
-    const valid = verifyPassword(password, user.passwordHash);
-    if (!valid) throw new Error('Invalid username or password');
+    // Check account lockout
+    const isLocked = await securityService.isAccountLocked(user.id);
+    if (isLocked) throw new Error('Account is locked due to too many failed attempts. Please try again later or contact administrator.');
+
+    const valid = verifyPassword(input.password, user.passwordHash);
+    if (!valid) {
+      // Record failed login attempt
+      await securityService.recordFailedLogin(user.id);
+      throw new Error('Invalid username or password');
+    }
+
+    // Reset failed login attempts on successful login
+    await securityService.resetFailedLogin(user.id);
+
+    // Check password expiry
+    const expiryCheck = await securityService.checkPasswordExpiry(user.id);
+    const mustChangePassword = !user.lastPasswordChange;
 
     const safe = toSafeUser(user);
-    setSession(safe);
-
-    // Log the login
-    await prisma.loginHistory.create({
-      data: { userId: user.id },
+    // Merge role-based permissions from rolePermission table
+    const rolePerms = await prisma.rolePermission.findMany({
+      where: { roleId: user.roleId || 0 },
+      include: { permission: true },
     });
+    const mergedPerms = [...new Set([...safe.permissions, ...rolePerms.map(rp => rp.permission.key)])];
+    const userWithRolePerms = { ...safe, permissions: mergedPerms };
+    setSession(userWithRolePerms);
 
-    return serialize(safe);
+    // Log the login via audit service
+    await auditService.logLogin(user.id);
+
+    return { ...serialize(userWithRolePerms), mustChangePassword, passwordExpired: expiryCheck.expired, passwordDaysLeft: expiryCheck.daysLeft };
   });
 
   // ─── Logout ─────────────────────────────────────────────────────
   ipcMain.handle('auth:logout', async () => {
     const session = getSession();
     if (session) {
-      const prisma = getPrismaClient();
-      // Update the most recent login record with logout time
-      const lastLogin = await prisma.loginHistory.findFirst({
-        where: { userId: session.id, logoutAt: null },
-        orderBy: { loginAt: 'desc' },
-      });
-      if (lastLogin) {
-        await prisma.loginHistory.update({
-          where: { id: lastLogin.id },
-          data: { logoutAt: new Date() },
-        });
-      }
+      await auditService.logLogout(session.id);
     }
     clearSession();
     return { success: true };
@@ -74,7 +87,18 @@ export function registerAuthIpc() {
       return null;
     }
 
-    return serialize(toSafeUser(user));
+    const safe = toSafeUser(user);
+    // Merge role-based permissions from rolePermission table
+    const rolePerms = await prisma.rolePermission.findMany({
+      where: { roleId: user.roleId || 0 },
+      include: { permission: true },
+    });
+    const mergedPerms = [...new Set([...safe.permissions, ...rolePerms.map(rp => rp.permission.key)])];
+    const userWithRolePerms = { ...safe, permissions: mergedPerms };
+    const expiryCheck = await securityService.checkPasswordExpiry(user.id);
+    const mustChangePassword = !user.lastPasswordChange;
+
+    return { ...serialize(userWithRolePerms), mustChangePassword, passwordExpired: expiryCheck.expired, passwordDaysLeft: expiryCheck.daysLeft };
   });
 
   // ─── Change Own Password ────────────────────────────────────────
@@ -82,19 +106,16 @@ export function registerAuthIpc() {
     const session = getSession();
     if (!session) throw new Error('Not logged in');
 
-    const user = await prisma.user.findUnique({ where: { id: session.id } });
-    if (!user) throw new Error('User not found');
+    // Delegate to SecurityService which enforces password policy
+    await securityService.changePassword(session.id, currentPassword, newPassword);
 
-    const valid = verifyPassword(currentPassword, user.passwordHash);
-    if (!valid) throw new Error('Current password is incorrect');
-
-    if (newPassword.length < 6) {
-      throw new Error('New password must be at least 6 characters');
-    }
-
-    await prisma.user.update({
-      where: { id: session.id },
-      data: { passwordHash: hashPassword(newPassword) },
+    // Audit log
+    await auditService.log({
+      userId: session.id,
+      action: 'UPDATE',
+      tableName: 'User',
+      recordId: session.id,
+      description: 'Password changed',
     });
 
     return { success: true };
@@ -109,6 +130,7 @@ export function registerAuthIpc() {
 
   // ─── Get All Permission Keys (for Admin UI) ────────────────────
   ipcMain.handle('auth:getPermissionKeys', async () => {
+    requireAuth();
     return Object.values(PERMISSION_KEYS);
   });
 
@@ -120,6 +142,7 @@ export function registerAuthIpc() {
     }
 
     const users = await prisma.user.findMany({
+      where: session.companyId ? { companyId: session.companyId } : undefined,
       orderBy: { createdAt: 'desc' },
     });
 
@@ -139,35 +162,43 @@ export function registerAuthIpc() {
       throw new Error('Permission denied: admin role required');
     }
 
-    if (!data.username || data.username.length < 3) {
-      throw new Error('Username must be at least 3 characters');
-    }
-    if (!data.password || data.password.length < 6) {
-      throw new Error('Password must be at least 6 characters');
-    }
-    if (!data.fullName) {
-      throw new Error('Full name is required');
-    }
-
-    const role = data.role || 'USER';
-    if (role !== 'ADMIN' && role !== 'USER') {
-      throw new Error('Role must be ADMIN or USER');
-    }
+    const input = validate(userSchema, data);
 
     // Check username uniqueness
-    const existing = await prisma.user.findUnique({ where: { username: data.username } });
+    const existing = await prisma.user.findUnique({ where: { username: input.username } });
     if (existing) {
-      throw new Error(`Username "${data.username}" already exists`);
+      throw new Error('Username already taken');
+    }
+
+    // Look up the RBAC role by name for this company
+    let roleId: number | undefined;
+    if (input.role) {
+      const role = await prisma.role.findFirst({
+        where: { name: input.role, companyId: input.companyId || session.companyId || 1 },
+      });
+      if (role) roleId = role.id;
     }
 
     const user = await prisma.user.create({
       data: {
-        username: data.username,
-        passwordHash: hashPassword(data.password),
-        fullName: data.fullName,
-        role,
-        permissions: JSON.stringify(data.permissions || []),
+        username: input.username,
+        passwordHash: hashPassword(input.password),
+        fullName: input.fullName,
+        role: input.role,
+        roleId: roleId || undefined,
+        permissions: JSON.stringify(input.permissions || []),
+        lastPasswordChange: new Date(),
+        passwordExpiry: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
       },
+    });
+
+    // Audit log
+    await auditService.log({
+      userId: session.id,
+      action: 'CREATE',
+      tableName: 'User',
+      recordId: user.id,
+      description: `User "${input.username}" created with role ${input.role}`,
     });
 
     return serialize(toSafeUser(user));
@@ -201,10 +232,16 @@ export function registerAuthIpc() {
     const updateData: any = {};
     if (data.fullName !== undefined) updateData.fullName = data.fullName;
     if (data.role !== undefined) {
-      if (data.role !== 'ADMIN' && data.role !== 'USER') {
-        throw new Error('Role must be ADMIN or USER');
+      const allowedRoles = ['ADMIN', 'STORE_MANAGER', 'DEPARTMENT_MANAGER', 'PURCHASE_MANAGER', 'VIEWER'];
+      if (!allowedRoles.includes(data.role)) {
+        throw new Error('Invalid role');
       }
       updateData.role = data.role;
+      // Also update roleId from RBAC system
+      const role = await prisma.role.findFirst({
+        where: { name: data.role, companyId: session.companyId || 1 },
+      });
+      if (role) updateData.roleId = role.id;
     }
     if (data.permissions !== undefined) {
       updateData.permissions = JSON.stringify(data.permissions);
@@ -221,6 +258,17 @@ export function registerAuthIpc() {
       setSession(toSafeUser(user));
     }
 
+    // Audit log
+    await auditService.log({
+      userId: session.id,
+      action: 'UPDATE',
+      tableName: 'User',
+      recordId: userId,
+      description: `User "${target.username}" updated`,
+      oldValues: { fullName: target.fullName, role: target.role, isActive: target.isActive },
+      newValues: updateData,
+    });
+
     return serialize(toSafeUser(user));
   });
 
@@ -231,16 +279,35 @@ export function registerAuthIpc() {
       throw new Error('Permission denied: admin role required');
     }
 
-    if (!newPassword || newPassword.length < 6) {
-      throw new Error('New password must be at least 6 characters');
-    }
-
     const target = await prisma.user.findUnique({ where: { id: userId } });
     if (!target) throw new Error('User not found');
 
+    // Enforce password policy instead of hardcoded 6-char minimum
+    const policy = await securityService.getPasswordPolicy(session.companyId || 1);
+    const validation = securityService.validatePassword(newPassword, policy);
+    if (!validation.valid) {
+      throw new Error(validation.errors.join('; '));
+    }
+
+    const expiryDays = policy.maxAgeDays || 90;
     await prisma.user.update({
       where: { id: userId },
-      data: { passwordHash: hashPassword(newPassword) },
+      data: {
+        passwordHash: hashPassword(newPassword),
+        lastPasswordChange: new Date(),
+        passwordExpiry: new Date(Date.now() + expiryDays * 24 * 60 * 60 * 1000),
+        failedLoginAttempts: 0,
+        lockedUntil: null,
+      },
+    });
+
+    // Audit log
+    await auditService.log({
+      userId: session.id,
+      action: 'UPDATE',
+      tableName: 'User',
+      recordId: userId,
+      description: `Admin reset password for user "${target.username}"`,
     });
 
     return { success: true };
@@ -270,6 +337,16 @@ export function registerAuthIpc() {
     }
 
     await prisma.user.delete({ where: { id: userId } });
+
+    // Audit log
+    await auditService.log({
+      userId: session.id,
+      action: 'DELETE',
+      tableName: 'User',
+      recordId: userId,
+      description: `User "${target.username}" deleted`,
+    });
+
     return { success: true };
   });
 }

@@ -2,6 +2,7 @@ import React from 'react';
 import { Box, Typography, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper, Divider, Button, Stack } from '@mui/material';
 import { PictureAsPdf, Print } from '@mui/icons-material';
 import { formatDateDDMMYYYY } from '../../utils/dateUtils';
+import { toNumber } from '../../utils/numberUtils';
 import toast from 'react-hot-toast';
 
 interface ChallanPrintLayoutProps {
@@ -55,21 +56,21 @@ export default function ChallanPrintLayout({ type, data, showActions = true }: C
           <>
             <Divider sx={{ my: 2 }} />
             <Typography variant="h6" textAlign="center" gutterBottom fontWeight={700}>
-              RECEIPT CHALLAN (AAMAD)
+              GOODS RECEIPT
             </Typography>
 
             <Box display="flex" justifyContent="space-between" mb={2} sx={{ flexWrap: 'wrap', gap: 1 }}>
               <Box sx={{ flex: 1, minWidth: 200 }}>
-                <Typography variant="body2" sx={{ mb: 0.5 }}><strong>Challan No:</strong> {data.challanNo}</Typography>
-                <Typography variant="body2" sx={{ mb: 0.5 }}><strong>Received From:</strong> {data.vendor?.name || data.sourceName}</Typography>
+                <Typography variant="body2" sx={{ mb: 0.5 }}><strong>Challan No:</strong> {data.voucherNo}</Typography>
+                <Typography variant="body2" sx={{ mb: 0.5 }}><strong>Received From:</strong> {data.vendor?.vendorName || data.sourceName}</Typography>
                 <Typography variant="body2" sx={{ mb: 0.5 }}><strong>Invoice No:</strong> {data.invoiceNumber || '-'}</Typography>
                 <Typography variant="body2" sx={{ mb: 0.5 }}><strong>Vehicle No:</strong> {data.vehicleNumber || '-'}</Typography>
-                {data.department && <Typography variant="body2" sx={{ mb: 0.5 }}><strong>Store:</strong> {data.department?.name}</Typography>}
+                <Typography variant="body2" sx={{ mb: 0.5 }}><strong>Store:</strong> {data.toStore?.name || '-'}</Typography>
               </Box>
               <Box textAlign="right" sx={{ minWidth: 150 }}>
-                <Typography variant="body2" sx={{ mb: 0.5 }}><strong>Date:</strong> {formatDateDDMMYYYY(data.date)}</Typography>
+                <Typography variant="body2" sx={{ mb: 0.5 }}><strong>Date:</strong> {formatDateDDMMYYYY(data.transactionDate)}</Typography>
                 <Typography variant="body2" sx={{ mb: 0.5 }}><strong>Received By:</strong> {data.receivedBy}</Typography>
-                <Typography variant="body2" sx={{ mb: 0.5 }}><strong>Status:</strong> {data.status}</Typography>
+                <Typography variant="body2" sx={{ mb: 0.5 }}><strong>Status:</strong> {data.approvalStatus}</Typography>
               </Box>
             </Box>
 
@@ -90,16 +91,16 @@ export default function ChallanPrintLayout({ type, data, showActions = true }: C
                     <TableRow key={idx}>
                       <TableCell sx={{ border: '1px solid #000' }}>{idx + 1}</TableCell>
                       <TableCell sx={{ border: '1px solid #000', whiteSpace: 'normal', wordBreak: 'break-word' }}>{item.item?.itemName}</TableCell>
-                      <TableCell sx={{ border: '1px solid #000' }} align="center">{item.quantity}</TableCell>
-                      <TableCell sx={{ border: '1px solid #000' }} align="center">{item.unit?.name}</TableCell>
-                      <TableCell sx={{ border: '1px solid #000' }} align="right">₹{Number(item.rate).toFixed(2)}</TableCell>
-                      <TableCell sx={{ border: '1px solid #000' }} align="right">₹{Number(item.amount || item.quantity * item.rate).toFixed(2)}</TableCell>
-                    </TableRow>
-                  ))}
-                  <TableRow sx={{ bgcolor: '#f5f5f5' }}>
+                       <TableCell sx={{ border: '1px solid #000' }} align="center">{toNumber(item.quantity)}</TableCell>
+                       <TableCell sx={{ border: '1px solid #000' }} align="center">{item.unit?.name}</TableCell>
+                       <TableCell sx={{ border: '1px solid #000' }} align="right">₹{toNumber(item.rate).toFixed(2)}</TableCell>
+                       <TableCell sx={{ border: '1px solid #000' }} align="right">₹{toNumber(item.amount || toNumber(item.quantity) * toNumber(item.rate)).toFixed(2)}</TableCell>
+                     </TableRow>
+                   ))}
+                   <TableRow sx={{ bgcolor: '#f5f5f5' }}>
                     <TableCell colSpan={5} sx={{ border: '1px solid #000', fontWeight: 700 }} align="right">Total</TableCell>
                     <TableCell sx={{ border: '1px solid #000', fontWeight: 700 }} align="right">
-                      ₹{data.items?.reduce((sum: number, i: any) => sum + Number(i.amount || i.quantity * i.rate || 0), 0).toFixed(2)}
+                      ₹{data.items?.reduce((sum: number, i: any) => sum + toNumber(i.amount || toNumber(i.quantity) * toNumber(i.rate)), 0).toFixed(2)}
                     </TableCell>
                   </TableRow>
                 </TableBody>
@@ -133,20 +134,21 @@ export default function ChallanPrintLayout({ type, data, showActions = true }: C
           <>
             <Divider sx={{ my: 2 }} />
             <Typography variant="h6" textAlign="center" gutterBottom fontWeight={700}>
-              ISSUE CHALLAN (KHARCH)
+              STORE ISSUE
             </Typography>
 
             <Box display="flex" justifyContent="space-between" mb={2} sx={{ flexWrap: 'wrap', gap: 1 }}>
               <Box sx={{ flex: 1, minWidth: 200 }}>
-                <Typography variant="body2" sx={{ mb: 0.5 }}><strong>Challan No:</strong> {data.challanNo}</Typography>
-                <Typography variant="body2" sx={{ mb: 0.5 }}><strong>Issue To:</strong> {data.department?.name}</Typography>
+                <Typography variant="body2" sx={{ mb: 0.5 }}><strong>Challan No:</strong> {data.voucherNo}</Typography>
+                <Typography variant="body2" sx={{ mb: 0.5 }}><strong>Source Store:</strong> {data.fromStore?.name || '-'}</Typography>
+                <Typography variant="body2" sx={{ mb: 0.5 }}><strong>Destination Store:</strong> {data.toStore?.name || data.department?.name || '-'}</Typography>
                 <Typography variant="body2" sx={{ mb: 0.5 }}><strong>Approved By:</strong> {data.approvedBy || '-'}</Typography>
                 {data.purpose && <Typography variant="body2" sx={{ mb: 0.5 }}><strong>Purpose:</strong> {data.purpose}</Typography>}
               </Box>
               <Box textAlign="right" sx={{ minWidth: 150 }}>
-                <Typography variant="body2" sx={{ mb: 0.5 }}><strong>Date:</strong> {formatDateDDMMYYYY(data.date)}</Typography>
+                <Typography variant="body2" sx={{ mb: 0.5 }}><strong>Date:</strong> {formatDateDDMMYYYY(data.transactionDate)}</Typography>
                 <Typography variant="body2" sx={{ mb: 0.5 }}><strong>Issued By:</strong> {data.issuedBy}</Typography>
-                <Typography variant="body2" sx={{ mb: 0.5 }}><strong>Status:</strong> {data.status}</Typography>
+                <Typography variant="body2" sx={{ mb: 0.5 }}><strong>Status:</strong> {data.approvalStatus}</Typography>
               </Box>
             </Box>
 
@@ -167,10 +169,10 @@ export default function ChallanPrintLayout({ type, data, showActions = true }: C
                     <TableRow key={idx}>
                       <TableCell sx={{ border: '1px solid #000' }}>{idx + 1}</TableCell>
                       <TableCell sx={{ border: '1px solid #000', whiteSpace: 'normal', wordBreak: 'break-word' }}>{item.item?.itemName}</TableCell>
-                      <TableCell sx={{ border: '1px solid #000' }} align="center">{item.quantity}</TableCell>
+                      <TableCell sx={{ border: '1px solid #000' }} align="center">{toNumber(item.quantity)}</TableCell>
                       <TableCell sx={{ border: '1px solid #000' }} align="center">{item.unit?.name}</TableCell>
                       <TableCell sx={{ border: '1px solid #000', whiteSpace: 'normal', wordBreak: 'break-word' }}>
-                        {item.location ? `${item.location.locationType} - ${item.location.locationName}` : item.usedAt || '-'}
+                        {item.location ? `${item.location.locationType} - ${item.location.name}` : item.usedAt || '-'}
                       </TableCell>
                       <TableCell sx={{ border: '1px solid #000' }}>{item.purpose || '-'}</TableCell>
                     </TableRow>
@@ -192,7 +194,7 @@ export default function ChallanPrintLayout({ type, data, showActions = true }: C
               </Box>
               <Box textAlign="center" sx={{ flex: 1, minWidth: 120 }}>
                 <Typography variant="body2" mb={4}>___________________</Typography>
-                <Typography variant="caption">Dept / Dharamshala Sign</Typography>
+                <Typography variant="caption">Store Sign</Typography>
               </Box>
               <Box textAlign="center" sx={{ flex: 1, minWidth: 120 }}>
                 <Typography variant="body2" mb={4}>___________________</Typography>
@@ -206,18 +208,18 @@ export default function ChallanPrintLayout({ type, data, showActions = true }: C
           <>
             <Divider sx={{ my: 2 }} />
             <Typography variant="h6" textAlign="center" gutterBottom fontWeight={700}>
-              TRANSFER CHALLAN
+              STORE TRANSFER
             </Typography>
 
             <Box display="flex" justifyContent="space-between" mb={2} sx={{ flexWrap: 'wrap', gap: 1 }}>
               <Box sx={{ flex: 1, minWidth: 200 }}>
-                <Typography variant="body2" sx={{ mb: 0.5 }}><strong>Challan No:</strong> {data.challanNo}</Typography>
-                <Typography variant="body2" sx={{ mb: 0.5 }}><strong>From:</strong> {data.fromDepartment?.name}</Typography>
-                <Typography variant="body2" sx={{ mb: 0.5 }}><strong>To:</strong> {data.toDepartment?.name}</Typography>
+                <Typography variant="body2" sx={{ mb: 0.5 }}><strong>Challan No:</strong> {data.voucherNo}</Typography>
+                <Typography variant="body2" sx={{ mb: 0.5 }}><strong>From:</strong> {data.fromStore?.name || data.department?.name}</Typography>
+                <Typography variant="body2" sx={{ mb: 0.5 }}><strong>To:</strong> {data.toStore?.name}</Typography>
               </Box>
               <Box textAlign="right" sx={{ minWidth: 150 }}>
-                <Typography variant="body2" sx={{ mb: 0.5 }}><strong>Date:</strong> {formatDateDDMMYYYY(data.date)}</Typography>
-                <Typography variant="body2" sx={{ mb: 0.5 }}><strong>Transferred By:</strong> {data.transferredBy}</Typography>
+                <Typography variant="body2" sx={{ mb: 0.5 }}><strong>Date:</strong> {formatDateDDMMYYYY(data.transactionDate)}</Typography>
+                <Typography variant="body2" sx={{ mb: 0.5 }}><strong>Transferred By:</strong> {data.issuedBy}</Typography>
               </Box>
             </Box>
 
@@ -237,8 +239,8 @@ export default function ChallanPrintLayout({ type, data, showActions = true }: C
                     <TableRow key={idx}>
                       <TableCell sx={{ border: '1px solid #000' }}>{idx + 1}</TableCell>
                       <TableCell sx={{ border: '1px solid #000', whiteSpace: 'normal', wordBreak: 'break-word' }}>{item.item?.itemName}</TableCell>
-                      <TableCell sx={{ border: '1px solid #000' }} align="center">{item.quantity}</TableCell>
-                      <TableCell sx={{ border: '1px solid #000' }} align="right">₹{Number(item.rate).toFixed(2)}</TableCell>
+                      <TableCell sx={{ border: '1px solid #000' }} align="center">{toNumber(item.quantity)}</TableCell>
+                      <TableCell sx={{ border: '1px solid #000' }} align="right">₹{toNumber(item.rate).toFixed(2)}</TableCell>
                       <TableCell sx={{ border: '1px solid #000' }}>{item.remarks || '-'}</TableCell>
                     </TableRow>
                   ))}
@@ -255,11 +257,11 @@ export default function ChallanPrintLayout({ type, data, showActions = true }: C
             <Box display="flex" justifyContent="space-between" mt={4} sx={{ flexWrap: 'wrap', gap: 2 }}>
               <Box textAlign="center" sx={{ flex: 1, minWidth: 120 }}>
                 <Typography variant="body2" mb={4}>___________________</Typography>
-                <Typography variant="caption">From Dept Sign</Typography>
+                <Typography variant="caption">From Store Sign</Typography>
               </Box>
               <Box textAlign="center" sx={{ flex: 1, minWidth: 120 }}>
                 <Typography variant="body2" mb={4}>___________________</Typography>
-                <Typography variant="caption">To Dept Sign</Typography>
+                <Typography variant="caption">To Store Sign</Typography>
               </Box>
               <Box textAlign="center" sx={{ flex: 1, minWidth: 120 }}>
                 <Typography variant="body2" mb={4}>___________________</Typography>

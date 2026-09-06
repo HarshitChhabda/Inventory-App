@@ -1,14 +1,15 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Box, Typography, Button, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, Paper, Stack, Alert, Chip, alpha, useTheme,
   Dialog, DialogTitle, DialogContent, DialogActions, CircularProgress,
   FormControl, InputLabel, Select, MenuItem, Tab, Tabs, Divider,
-  IconButton, Tooltip,
+  IconButton, Tooltip, Grid,
 } from '@mui/material';
 import {
   Backup, Restore, FolderOpen, CloudUpload, FileDownload, FileUpload,
   TableChart, Description, Inventory, Info, HomeWork, Delete, Warning,
+  Storage, LocationOn, Schedule, ContentCopy,
 } from '@mui/icons-material';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import PageHeader from '../../components/PageHeader';
@@ -18,6 +19,9 @@ import { formatDateDDMMYYYY, todayISO } from '../../utils/dateUtils';
 import { downloadBuffer } from '../../utils/importExport';
 import { useCompany } from '../../context/CompanyContext';
 import toast from 'react-hot-toast';
+import { getErrorMessage } from '../../utils/errorUtils';
+import { GuideButton } from '../../components/GuideSystem';
+import ImportProgressDialog, { getInitialProgress, ImportProgress } from '../../components/ImportProgressDialog';
 
 export default function BackupPage() {
   const queryClient = useQueryClient();
@@ -31,14 +35,19 @@ export default function BackupPage() {
   const [activeTab, setActiveTab] = useState(0);
   const [backupInfoDialog, setBackupInfoDialog] = useState(false);
   const [openingStockRows, setOpeningStockRows] = useState<any[]>([]);
-  const [openingStockImporting, setOpeningStockImporting] = useState(false);
   const [importHistory, setImportHistory] = useState<any[]>([]);
   const [deleteDialog, setDeleteDialog] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<any>(null);
   const [deleting, setDeleting] = useState(false);
+  const [importProgress, setImportProgress] = useState<ImportProgress>(getInitialProgress);
   const { data: backups, isLoading } = useQuery({
     queryKey: ['backups'],
     queryFn: () => window.electronAPI.listBackups(),
+  });
+
+  const { data: storageInfo } = useQuery({
+    queryKey: ['storageInfo'],
+    queryFn: () => window.electronAPI.getStorageInfo(),
   });
 
   const { data: tables } = useQuery({
@@ -51,12 +60,14 @@ export default function BackupPage() {
     queryFn: () => window.electronAPI.getBackupInfo(),
   });
 
+  const [locationGuideOpen, setLocationGuideOpen] = useState(false);
+
   // Load import history
-  const loadImportHistory = async () => {
+  const loadImportHistory = async (signal?: AbortSignal) => {
     if (!company?.id) return;
     try {
       const history = await window.electronAPI.listImportHistory(company.id);
-      setImportHistory(history);
+      if (!signal?.aborted) setImportHistory(history);
     } catch (err) {
       console.error('Failed to load import history:', err);
     }
@@ -64,7 +75,9 @@ export default function BackupPage() {
 
   // Load history on mount and when company changes
   React.useEffect(() => {
-    loadImportHistory();
+    const controller = new AbortController();
+    loadImportHistory(controller.signal);
+    return () => controller.abort();
   }, [company?.id]);
 
   const createBackupMutation = useMutation({
@@ -73,10 +86,16 @@ export default function BackupPage() {
       queryClient.invalidateQueries({ queryKey: ['backups'] });
       toast.success('Backup created successfully!');
     },
+    onError: (err: any) => {
+      toast.error(getErrorMessage(err, 'Failed to create backup'));
+    },
   });
 
   const restoreMutation = useMutation({
     mutationFn: (path: string) => window.electronAPI.restoreBackup(path),
+    onError: (err: any) => {
+      toast.error(getErrorMessage(err, 'Failed to restore backup'));
+    },
   });
 
   const exportAllMutation = useMutation({
@@ -85,7 +104,7 @@ export default function BackupPage() {
       downloadBuffer(buffer, `inventory-complete-backup-${todayISO()}.xlsx`);
     },
     onSuccess: () => toast.success('Complete backup exported!'),
-    onError: (err: any) => toast.error('Export failed: ' + err.message),
+    onError: (err: any) => toast.error(getErrorMessage(err, 'Export failed')),
   });
 
   const handleDownloadOpeningStockTemplate = async () => {
@@ -94,7 +113,7 @@ export default function BackupPage() {
       downloadBuffer(buffer, `stock-import-template.xlsx`);
       toast.success('Stock import template downloaded!');
     } catch (err: any) {
-      toast.error('Failed: ' + err.message);
+      toast.error(getErrorMessage(err, 'Failed to download template'));
     }
   };
 
@@ -116,7 +135,7 @@ export default function BackupPage() {
       }
       setOpeningStockRows(parsed.rows);
     } catch (err: any) {
-      toast.error('Failed to read file: ' + err.message);
+      toast.error(getErrorMessage(err, 'Failed to read file'));
     }
   };
 
@@ -125,12 +144,31 @@ export default function BackupPage() {
       toast.error('Select a company and financial year first');
       return;
     }
-    setOpeningStockImporting(true);
+    const total = openingStockRows.length;
+    setImportProgress({ active: true, current: 0, total, created: 0, updated: 0, skipped: 0, errors: [] });
     try {
+      if (total > 0) {
+        const sampleRow = openingStockRows[0];
+        const keys = Object.keys(sampleRow);
+        const hasQty = keys.some(k => k.toLowerCase() === 'qty' || k.toLowerCase() === 'quantity');
+        const hasStore = keys.some(k => k.toLowerCase().includes('store') || k.toLowerCase().includes('department'));
+        if (!hasQty) {
+          toast.error(`Qty column not found! Detected columns: ${keys.join(', ')}. Please use the downloaded template.`);
+          setImportProgress(prev => ({ ...prev, active: false }));
+          return;
+        }
+        if (!hasStore) {
+          toast.error(`Store column not found! Detected columns: ${keys.join(', ')}. Please use the downloaded template.`);
+          setImportProgress(prev => ({ ...prev, active: false }));
+          return;
+        }
+      }
+
+      setImportProgress(prev => ({ ...prev, current: Math.floor(total / 2) }));
+
       const rows = openingStockRows.map((r: any) => ({
-        dharamshalaDept: r['Dharamshala/Department'] || r['dharamshalaDept'] || r['dharamshala'] || r['department'] || '',
+        dharamshalaDept: r['Store Name'] || r['Store/Department'] || r['Dharamshala/Department'] || r['dharamshalaDept'] || r['dharamshala'] || r['department'] || r['store'] || '',
         roomLocation: r['Room/Location'] || r['roomLocation'] || r['room'] || r['location'] || '',
-        category: r['Category'] || r['category'] || '',
         itemCode: r['Item Code'] || r['itemCode'] || r['code'] || '',
         itemName: r['Item Name'] || r['itemName'] || '',
         unit: r['Unit'] || r['unit'] || '',
@@ -140,11 +178,26 @@ export default function BackupPage() {
         status: r['Status'] || r['status'] || 'Available',
         remarks: r['Remarks'] || r['remarks'] || '',
       }));
+
+      setImportProgress(prev => ({ ...prev, current: Math.floor(total * 0.75) }));
+
       const result = await window.electronAPI.bulkImportOpeningStock({
         companyId: company.id,
         financialYearId: financialYear.id,
         rows,
       });
+
+      const errors = (result.errors || []).map((e: string) => e);
+      setImportProgress({
+        active: false,
+        current: total,
+        total,
+        created: result.imported,
+        updated: 0,
+        skipped: result.total - result.imported,
+        errors,
+      });
+
       if (result.imported > 0) {
         toast.success(`Imported ${result.imported} of ${result.total} rows`);
         try {
@@ -166,9 +219,8 @@ export default function BackupPage() {
       }
       setOpeningStockRows([]);
     } catch (err: any) {
-      toast.error('Import failed: ' + err.message);
-    } finally {
-      setOpeningStockImporting(false);
+      setImportProgress(prev => ({ ...prev, active: false }));
+      toast.error(getErrorMessage(err, 'Import failed'));
     }
   };
 
@@ -194,7 +246,7 @@ export default function BackupPage() {
       setImportRows(parsed.rows);
       setImportDialog(true);
     } catch (err: any) {
-      toast.error('Failed to read file: ' + err.message);
+      toast.error(getErrorMessage(err, 'Failed to read file'));
     }
   };
 
@@ -202,11 +254,26 @@ export default function BackupPage() {
     if (!importModel) { toast.error('Select a table first'); return; }
     const table = tables?.find((t: any) => t.model === importModel);
     if (!table) return;
-    setImporting(true);
+    const total = importRows.length;
+    setImportProgress({ active: true, current: 0, total, created: 0, updated: 0, skipped: 0, errors: [] });
     try {
+      setImportProgress(prev => ({ ...prev, current: Math.floor(total / 2) }));
+
       const result = await window.electronAPI.bulkUpsert(importModel, importRows, table.matchField);
+
+      const errors = (result.errors || []).map((e: string) => e);
+      setImportProgress({
+        active: false,
+        current: total,
+        total,
+        created: result.created,
+        updated: result.updated,
+        skipped: result.skipped,
+        errors,
+      });
+
       toast.success(`Import complete: ${result.created} created, ${result.updated} updated, ${result.skipped} skipped`);
-      // Save import history
+
       if (company?.id && financialYear?.id) {
         try {
           await window.electronAPI.createImportHistory({
@@ -226,9 +293,8 @@ export default function BackupPage() {
       setImportRows([]);
       setImportModel('');
     } catch (err: any) {
-      toast.error('Import failed: ' + err.message);
-    } finally {
-      setImporting(false);
+      setImportProgress(prev => ({ ...prev, active: false }));
+      toast.error(getErrorMessage(err, 'Import failed'));
     }
   };
 
@@ -238,7 +304,7 @@ export default function BackupPage() {
       downloadBuffer(buffer, `import-template-${model}.xlsx`);
       toast.success(`Template downloaded for ${model}`);
     } catch (err: any) {
-      toast.error('Failed to download template: ' + err.message);
+      toast.error(getErrorMessage(err, 'Failed to download template'));
     }
   };
 
@@ -256,7 +322,7 @@ export default function BackupPage() {
       setDeleteTarget(null);
       loadImportHistory();
     } catch (err: any) {
-      toast.error('Delete failed: ' + err.message);
+      toast.error(getErrorMessage(err, 'Delete failed'));
     } finally {
       setDeleting(false);
     }
@@ -275,6 +341,7 @@ export default function BackupPage() {
         subtitle="Manage database backups, export/import data, download import templates"
         actions={
           <Stack direction="row" spacing={1.5}>
+            <GuideButton pageId="backup" />
             <Button
               variant="outlined"
               startIcon={<Info />}
@@ -302,7 +369,7 @@ export default function BackupPage() {
               startIcon={<FolderOpen />}
               onClick={async () => {
                 const dir = await window.electronAPI.getExportsDir();
-                alert(`Exports directory: ${dir}`);
+                toast.success(`Exports directory: ${dir}`);
               }}
             >
               Open Folder
@@ -323,9 +390,38 @@ export default function BackupPage() {
         severity="info"
         sx={{ mb: 2.5, borderRadius: 2, '& .MuiAlert-icon': { alignItems: 'center' } }}
       >
-        Backups are automatic every 15 minutes. Daily (30 days), Weekly (12 weeks), Monthly (24 months), Yearly (5 years).
+        Backups are automatic every hour. Daily (7 days), Weekly (4 weeks), Monthly (6 months), Yearly (3 years).
         "Complete Excel Backup" exports ALL tables with ALL data. Use "Import Data" to restore from Excel/CSV.
       </Alert>
+
+      {/* Storage Info Cards */}
+      {storageInfo && (
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2, 1fr)', sm: 'repeat(4, 1fr)' }, gap: 1.5, mb: 2.5 }}>
+          <Paper sx={{ p: 1.5, textAlign: 'center', border: '1px solid', borderColor: 'divider' }}>
+            <Storage sx={{ fontSize: 20, color: 'primary.main', mb: 0.5 }} />
+            <Typography variant="h6" fontWeight={700} fontSize="1rem">{formatSize(storageInfo.totalSize)}</Typography>
+            <Typography variant="caption" color="text.secondary">Total Storage</Typography>
+          </Paper>
+          <Paper sx={{ p: 1.5, textAlign: 'center', border: '1px solid', borderColor: 'divider' }}>
+            <Backup sx={{ fontSize: 20, color: 'success.main', mb: 0.5 }} />
+            <Typography variant="h6" fontWeight={700} fontSize="1rem">{storageInfo.totalCount}</Typography>
+            <Typography variant="caption" color="text.secondary">Total Backups</Typography>
+          </Paper>
+          <Paper sx={{ p: 1.5, textAlign: 'center', border: '1px solid', borderColor: 'divider' }}>
+            <Schedule sx={{ fontSize: 20, color: 'warning.main', mb: 0.5 }} />
+            <Typography variant="h6" fontWeight={700} fontSize="1rem">{storageInfo.byType?.hourly?.count || 0}</Typography>
+            <Typography variant="caption" color="text.secondary">Hourly Backups</Typography>
+          </Paper>
+          <Paper
+            sx={{ p: 1.5, textAlign: 'center', border: '1px solid', borderColor: 'divider', cursor: 'pointer', '&:hover': { bgcolor: 'action.hover' } }}
+            onClick={() => setLocationGuideOpen(true)}
+          >
+            <LocationOn sx={{ fontSize: 20, color: 'error.main', mb: 0.5 }} />
+            <Typography variant="h6" fontWeight={700} fontSize="0.75rem" noWrap>{storageInfo.backupPath?.split(/[\\/]/).pop()}</Typography>
+            <Typography variant="caption" color="text.secondary">Backup Location</Typography>
+          </Paper>
+        </Box>
+      )}
 
       <Tabs value={activeTab} onChange={(_, v) => setActiveTab(v)} sx={{ mb: 2 }}>
         <Tab label="Database Backups" icon={<Backup />} iconPosition="start" />
@@ -427,7 +523,7 @@ export default function BackupPage() {
                 <TableRow>
                   <TableCell>Table</TableCell>
                   <TableCell>Description</TableCell>
-                  <TableCell>Required Columns</TableCell>
+                  <TableCell>Columns ( * = required )</TableCell>
                   <TableCell align="right">Action</TableCell>
                 </TableRow>
               </TableHead>
@@ -453,9 +549,19 @@ export default function BackupPage() {
                     </TableCell>
                     <TableCell>
                       <Stack direction="row" flexWrap="wrap" gap={0.5}>
-                        {table.fields.map((f: string) => (
-                          <Chip key={f} label={f} size="small" variant="outlined" />
-                        ))}
+                        {table.fields.map((f: string) => {
+                          const isRequired = table.required?.includes(f);
+                          return (
+                            <Chip
+                              key={f}
+                              label={isRequired ? `${f} *` : f}
+                              size="small"
+                              variant={isRequired ? 'filled' : 'outlined'}
+                              color={isRequired ? 'primary' : 'default'}
+                              sx={{ fontSize: '0.7rem' }}
+                            />
+                          );
+                        })}
                       </Stack>
                     </TableCell>
                     <TableCell align="right">
@@ -507,11 +613,11 @@ export default function BackupPage() {
                 </Typography>
                 <Button
                   variant="contained"
-                  startIcon={openingStockImporting ? <CircularProgress size={16} /> : <FileUpload />}
+                  startIcon={importProgress.active ? <CircularProgress size={16} /> : <FileUpload />}
                   onClick={handleBulkImportOpeningStock}
-                  disabled={openingStockImporting}
+                  disabled={importProgress.active}
                 >
-                  {openingStockImporting ? 'Importing...' : `Import ${openingStockRows.length} Rows`}
+                  {importProgress.active ? 'Importing...' : `Import ${openingStockRows.length} Rows`}
                 </Button>
               </Stack>
               <TableContainer sx={{ maxHeight: 400 }}>
@@ -548,13 +654,13 @@ export default function BackupPage() {
               Undo / Rollback Import
             </Typography>
             <Typography variant="body2" color="text.secondary" mb={2}>
-              Galat file import ho gayi? Neeche ke button se last 10 minutes ke saare imports delete ho jayenge.
+              Accidentally imported wrong file? Click the button below to delete all imports from the last 10 minutes.
             </Typography>
             <Button
               variant="outlined"
               color="error"
               onClick={async () => {
-                if (!confirm('Last 10 minutes ke saare stock entries delete ho jayenge. Confirm?')) return;
+                if (!confirm('All stock entries from the last 10 minutes will be permanently deleted. Are you sure?')) return;
                 try {
                   const result = await window.electronAPI.undoOpeningStockImport({
                     companyId: company!.id,
@@ -564,7 +670,7 @@ export default function BackupPage() {
                   toast.success(result.message);
                   loadImportHistory();
                 } catch (err: any) {
-                  toast.error('Undo failed: ' + err.message);
+                  toast.error(getErrorMessage(err, 'Undo failed'));
                 }
               }}
             >
@@ -578,7 +684,7 @@ export default function BackupPage() {
               <Typography variant="subtitle1" fontWeight={600}>
                 Import History
               </Typography>
-              <Button size="small" onClick={loadImportHistory}>Refresh</Button>
+              <Button size="small" onClick={() => loadImportHistory()}>Refresh</Button>
             </Stack>
             {importHistory.length === 0 ? (
               <Alert severity="info">No imports recorded yet.</Alert>
@@ -640,7 +746,7 @@ export default function BackupPage() {
               {deleteTarget && (
                 <Stack spacing={2}>
                   <Alert severity="error">
-                    Ye action undo nahi ho sakta! Is import se jude saare stock transactions delete ho jayenge.
+                    This action cannot be undone! All stock transactions associated with this import will be permanently deleted.
                   </Alert>
                   <Paper sx={{ p: 2, bgcolor: 'grey.50' }}>
                     <Typography variant="body2"><strong>File:</strong> {deleteTarget.fileName}</Typography>
@@ -650,7 +756,7 @@ export default function BackupPage() {
                     <Typography variant="body2"><strong>Date:</strong> {formatDateDDMMYYYY(deleteTarget.createdAt)}</Typography>
                   </Paper>
                   <Typography variant="body2" color="text.secondary">
-                    Kya aap sach mein ye import data delete karna chahte ho?
+                    Are you sure you want to delete this import data?
                   </Typography>
                 </Stack>
               )}
@@ -664,7 +770,7 @@ export default function BackupPage() {
                 disabled={deleting}
                 startIcon={deleting ? <CircularProgress size={16} /> : <Delete />}
               >
-                {deleting ? 'Deleting...' : 'Ha, Delete Karo'}
+                {deleting ? 'Deleting...' : 'Yes, Delete'}
               </Button>
             </DialogActions>
           </Dialog>
@@ -786,6 +892,76 @@ export default function BackupPage() {
           <Button onClick={() => setBackupInfoDialog(false)}>Close</Button>
         </DialogActions>
       </Dialog>
+
+      {/* Location Guide Dialog */}
+      <Dialog open={locationGuideOpen} onClose={() => setLocationGuideOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>
+          <Stack direction="row" alignItems="center" spacing={1}>
+            <LocationOn />
+            <Typography variant="h6">Backup Location Guide</Typography>
+          </Stack>
+        </DialogTitle>
+        <DialogContent>
+          <Alert severity="info" sx={{ mb: 2 }}>
+            All backups are stored in the following location. You can copy this path to access backups directly.
+          </Alert>
+
+          <Paper sx={{ p: 2, mb: 2, bgcolor: 'grey.50', border: '1px solid', borderColor: 'divider' }}>
+            <Typography variant="caption" color="text.secondary" sx={{ mb: 0.5, display: 'block' }}>Backup Storage Path:</Typography>
+            <Stack direction="row" alignItems="center" spacing={1}>
+              <Typography sx={{ fontFamily: 'monospace', fontSize: '0.85rem', wordBreak: 'break-all', flex: 1 }}>
+                {storageInfo?.backupPath || 'Loading...'}
+              </Typography>
+              <Tooltip title="Copy path">
+                <IconButton size="small" onClick={() => {
+                  navigator.clipboard.writeText(storageInfo?.backupPath || '');
+                  toast.success('Path copied to clipboard!');
+                }}>
+                  <ContentCopy fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            </Stack>
+          </Paper>
+
+          <Typography variant="subtitle2" fontWeight={700} gutterBottom>Backup Folders:</Typography>
+          <Box sx={{ pl: 1 }}>
+            <Stack spacing={0.75}>
+              <Stack direction="row" spacing={1} alignItems="center">
+                <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: 'warning.main' }} />
+                <Typography variant="body2"><strong>hourly/</strong> — Every hour, keeps last 8 backups (~8 hours)</Typography>
+              </Stack>
+              <Stack direction="row" spacing={1} alignItems="center">
+                <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: 'primary.main' }} />
+                <Typography variant="body2"><strong>daily/</strong> — Every midnight, keeps last 7 backups (~1 week)</Typography>
+              </Stack>
+              <Stack direction="row" spacing={1} alignItems="center">
+                <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: 'secondary.main' }} />
+                <Typography variant="body2"><strong>weekly/</strong> — Every Sunday, keeps last 4 backups (~1 month)</Typography>
+              </Stack>
+              <Stack direction="row" spacing={1} alignItems="center">
+                <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: 'info.main' }} />
+                <Typography variant="body2"><strong>monthly/</strong> — 1st of each month, keeps last 6 backups (~6 months)</Typography>
+              </Stack>
+              <Stack direction="row" spacing={1} alignItems="center">
+                <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: 'success.main' }} />
+                <Typography variant="body2"><strong>yearly/</strong> — 1st January, keeps last 3 backups (~3 years)</Typography>
+              </Stack>
+            </Stack>
+          </Box>
+
+          <Alert severity="warning" sx={{ mt: 2 }}>
+            <Typography variant="body2"><strong>How to change backup location:</strong></Typography>
+            <Typography variant="body2">1. Click "Open Folder" to see current backups</Typography>
+            <Typography variant="body2">2. Copy the backup path from above</Typography>
+            <Typography variant="body2">3. Create a new folder where you want to store backups</Typography>
+            <Typography variant="body2">4. Contact administrator to update the backup location</Typography>
+          </Alert>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setLocationGuideOpen(false)}>Close</Button>
+        </DialogActions>
+      </Dialog>
+      <ImportProgressDialog progress={importProgress} onClose={() => setImportProgress(getInitialProgress())} entityLabel="data" />
     </Box>
   );
 }

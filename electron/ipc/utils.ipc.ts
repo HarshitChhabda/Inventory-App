@@ -5,6 +5,25 @@ import ExcelJS from 'exceljs';
 import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
 import fs from 'fs';
 import path from 'path';
+import { BackupService } from '../../src/main/services/backup.service';
+import { BulkOperationsService } from '../../src/main/services/bulkOperations.service';
+
+let backupService: BackupService | null = null;
+let bulkOpsService: BulkOperationsService | null = null;
+
+function getBackupService(): BackupService {
+  if (!backupService) {
+    backupService = new BackupService();
+  }
+  return backupService;
+}
+
+function getBulkOpsService(): BulkOperationsService {
+  if (!bulkOpsService) {
+    bulkOpsService = new BulkOperationsService(getPrismaClient());
+  }
+  return bulkOpsService;
+}
 
 export function registerUtilsIpc(mainWindow: Electron.BrowserWindow | null) {
   const prisma = getPrismaClient();
@@ -270,7 +289,7 @@ export function registerUtilsIpc(mainWindow: Electron.BrowserWindow | null) {
       { model: 'issueChallanItem', name: 'Issue Challan Items' },
       { model: 'transferChallan', name: 'Transfer Challans' },
       { model: 'transferChallanItem', name: 'Transfer Challan Items' },
-      { model: 'stockTransaction', name: 'Stock Transactions' },
+      { model: 'ledgerEntry', name: 'Ledger Entries (Stock)' },
       { model: 'openingStock', name: 'Opening Stock' },
       { model: 'damageEntry', name: 'Damage Entries' },
       { model: 'stockAdjustment', name: 'Stock Adjustments' },
@@ -315,7 +334,7 @@ export function registerUtilsIpc(mainWindow: Electron.BrowserWindow | null) {
       { model: 'issueChallanItem', name: 'Issue Challan Items' },
       { model: 'transferChallan', name: 'Transfer Challans' },
       { model: 'transferChallanItem', name: 'Transfer Challan Items' },
-      { model: 'stockTransaction', name: 'Stock Transactions' },
+      { model: 'ledgerEntry', name: 'Ledger Entries (Stock)' },
       { model: 'openingStock', name: 'Opening Stock' },
       { model: 'damageEntry', name: 'Damage Entries' },
       { model: 'stockAdjustment', name: 'Stock Adjustments' },
@@ -380,6 +399,300 @@ export function registerUtilsIpc(mainWindow: Electron.BrowserWindow | null) {
     return Buffer.from(buffer);
   });
 }
+
+  // ============================================================
+  // ENHANCED BACKUP HANDLERS
+  // ============================================================
+
+  // Create manual versioned backup
+  ipcMain.handle('backup:createManual', async (_event, label?: string) => {
+    requireAuth();
+    const service = getBackupService();
+    return service.createManualBackup(label);
+  });
+
+  // Create pre-import backup
+  ipcMain.handle('backup:createPreImport', async (_event, importType: string, rowCount: number) => {
+    requireAuth();
+    const service = getBackupService();
+    return service.createPreImportBackup(importType, rowCount);
+  });
+
+  // Create pre-upgrade backup
+  ipcMain.handle('backup:createPreUpgrade', async (_event, version: string) => {
+    requireAuth();
+    const service = getBackupService();
+    return service.createPreUpgradeBackup(version);
+  });
+
+  // Create disaster recovery backup
+  ipcMain.handle('backup:createDisasterRecovery', async () => {
+    requireAuth();
+    const service = getBackupService();
+    return service.createDisasterRecoveryBackup();
+  });
+
+  // List versioned backups
+  ipcMain.handle('backup:listVersioned', async (_event, type?: string) => {
+    requireAuth();
+    const service = getBackupService();
+    return service.listVersionedBackups(type as any);
+  });
+
+  // Verify backup integrity
+  ipcMain.handle('backup:verifyIntegrity', async (_event, backupId: string) => {
+    requireAuth();
+    const service = getBackupService();
+    return service.verifyBackupIntegrity(backupId);
+  });
+
+  // Verify all backups
+  ipcMain.handle('backup:verifyAll', async () => {
+    requireAuth();
+    const service = getBackupService();
+    return service.verifyAllBackups();
+  });
+
+  // Disaster recovery restore
+  ipcMain.handle('backup:disasterRecoveryRestore', async (_event, backupId: string) => {
+    requireAuth();
+    const service = getBackupService();
+    return service.disasterRecoveryRestore(backupId);
+  });
+
+  // ============================================================
+  // BULK OPERATIONS HANDLERS
+  // ============================================================
+
+  // Bulk Transfer
+  ipcMain.handle('bulk:transfer', async (_event, input: any) => {
+    requireAuth();
+    const service = getBulkOpsService();
+    return service.bulkTransfer(input);
+  });
+
+  // Bulk Issue
+  ipcMain.handle('bulk:issue', async (_event, input: any) => {
+    requireAuth();
+    const service = getBulkOpsService();
+    return service.bulkIssue(input);
+  });
+
+  // Bulk Return
+  ipcMain.handle('bulk:return', async (_event, input: any) => {
+    requireAuth();
+    const service = getBulkOpsService();
+    return service.bulkReturn(input);
+  });
+
+  // Bulk Install
+  ipcMain.handle('bulk:install', async (_event, input: any) => {
+    requireAuth();
+    const service = getBulkOpsService();
+    return service.bulkInstall(input);
+  });
+
+  // Bulk Uninstall
+  ipcMain.handle('bulk:uninstall', async (_event, input: any) => {
+    requireAuth();
+    const service = getBulkOpsService();
+    return service.bulkUninstall(input);
+  });
+
+  // Bulk Damage
+  ipcMain.handle('bulk:damage', async (_event, input: any) => {
+    requireAuth();
+    const service = getBulkOpsService();
+    return service.bulkDamage(input);
+  });
+
+  // Bulk Asset Assignment
+  ipcMain.handle('bulk:assetAssignment', async (_event, input: any) => {
+    requireAuth();
+    const service = getBulkOpsService();
+    return service.bulkAssetAssignment(input);
+  });
+
+  // Bulk Approval
+  ipcMain.handle('bulk:approval', async (_event, input: any) => {
+    requireAuth();
+    const service = getBulkOpsService();
+    return service.bulkApproval(input);
+  });
+
+  // Export bulk operation report
+  ipcMain.handle('bulk:exportReport', async (_event, result: any, operationType: string) => {
+    requireAuth();
+    const service = getBulkOpsService();
+    return service.exportBulkReport(result, operationType);
+  });
+
+  // ============================================================
+  // PDF EXPORT FOR REPORTS
+  // ============================================================
+
+  // Generate PDF report from data
+  ipcMain.handle('report:generatePdf', async (_event, data: { title: string; columns: Array<{ header: string; key: string }>; rows: any[]; fileName?: string }) => {
+    requireAuth();
+    const pdfDoc = await PDFDocument.create();
+    const page = pdfDoc.addPage([595.28, 841.89]); // A4
+
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+
+    let y = 800;
+    const margin = 40;
+    const lineHeight = 14;
+
+    // Title
+    page.drawText(data.title, {
+      x: margin,
+      y,
+      size: 16,
+      font: boldFont,
+      color: rgb(0, 0, 0),
+    });
+    y -= 30;
+
+    // Date
+    page.drawText(`Generated: ${new Date().toLocaleDateString()}`, {
+      x: margin,
+      y,
+      size: 10,
+      font,
+      color: rgb(0.5, 0.5, 0.5),
+    });
+    y -= 25;
+
+    // Column headers
+    const colWidth = (595.28 - 2 * margin) / data.columns.length;
+    let x = margin;
+    for (const col of data.columns) {
+      page.drawText(col.header, {
+        x,
+        y,
+        size: 10,
+        font: boldFont,
+        color: rgb(1, 1, 1),
+      });
+      x += colWidth;
+    }
+    y -= lineHeight;
+
+    // Separator line
+    page.drawLine({
+      start: { x: margin, y: y + 5 },
+      end: { x: 595.28 - margin, y: y + 5 },
+      thickness: 1,
+      color: rgb(0, 0, 0),
+    });
+    y -= 5;
+
+    // Data rows
+    for (const row of data.rows) {
+      if (y < 40) {
+        const newPage = pdfDoc.addPage([595.28, 841.89]);
+        y = 800;
+      }
+
+      x = margin;
+      for (const col of data.columns) {
+        const val = String(row[col.key] ?? '');
+        page.drawText(val.substring(0, 40), {
+          x,
+          y,
+          size: 9,
+          font,
+          color: rgb(0, 0, 0),
+        });
+        x += colWidth;
+      }
+      y -= lineHeight;
+    }
+
+    const pdfBytes = await pdfDoc.save();
+    const fileName = data.fileName || `report_${Date.now()}.pdf`;
+
+    const saveResult = await dialog.showSaveDialog(mainWindow!, {
+      defaultPath: fileName,
+      filters: [{ name: 'PDF Files', extensions: ['pdf'] }],
+    });
+
+    if (!saveResult.canceled && saveResult.filePath) {
+      fs.writeFileSync(saveResult.filePath, pdfBytes);
+      return { success: true, path: saveResult.filePath };
+    }
+    return { success: false };
+  });
+
+  // Print report (generate PDF and open in default viewer)
+  ipcMain.handle('report:print', async (_event, data: { title: string; columns: Array<{ header: string; key: string }>; rows: any[] }) => {
+    requireAuth();
+    const pdfDoc = await PDFDocument.create();
+    const page = pdfDoc.addPage([595.28, 841.89]);
+
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+
+    let y = 800;
+    const margin = 40;
+    const lineHeight = 14;
+
+    page.drawText(data.title, {
+      x: margin, y, size: 16, font: boldFont, color: rgb(0, 0, 0),
+    });
+    y -= 30;
+
+    page.drawText(`Printed: ${new Date().toLocaleString()}`, {
+      x: margin, y, size: 10, font, color: rgb(0.5, 0.5, 0.5),
+    });
+    y -= 25;
+
+    const colWidth = (595.28 - 2 * margin) / data.columns.length;
+    let x = margin;
+    for (const col of data.columns) {
+      page.drawText(col.header, {
+        x, y, size: 10, font: boldFont, color: rgb(1, 1, 1),
+      });
+      x += colWidth;
+    }
+    y -= lineHeight;
+
+    page.drawLine({
+      start: { x: margin, y: y + 5 },
+      end: { x: 595.28 - margin, y: y + 5 },
+      thickness: 1,
+      color: rgb(0, 0, 0),
+    });
+    y -= 5;
+
+    for (const row of data.rows) {
+      if (y < 40) {
+        const newPage = pdfDoc.addPage([595.28, 841.89]);
+        y = 800;
+      }
+
+      x = margin;
+      for (const col of data.columns) {
+        const val = String(row[col.key] ?? '');
+        page.drawText(val.substring(0, 40), {
+          x, y, size: 9, font, color: rgb(0, 0, 0),
+        });
+        x += colWidth;
+      }
+      y -= lineHeight;
+    }
+
+    const pdfBytes = await pdfDoc.save();
+    const tempPath = path.join(app.getPath('temp'), `report_${Date.now()}.pdf`);
+    fs.writeFileSync(tempPath, pdfBytes);
+
+    // Open in default PDF viewer
+    const { shell } = require('electron');
+    shell.openPath(tempPath);
+
+    return { success: true, path: tempPath };
+  });
 
 function drawHtmlToPage(page: any, html: string, width: number, height: number, font: any, boldFont: any) {
   const lines = html.split('\n');

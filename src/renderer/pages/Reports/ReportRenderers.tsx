@@ -12,9 +12,19 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, PieChart, 
 import { exportToExcel, ExportColumn, downloadBuffer } from '../../utils/importExport';
 import { formatDateDDMMYYYY } from '../../utils/dateUtils';
 import toast from 'react-hot-toast';
+import StatusBadge from '../../components/StatusBadge';
 
 const BRAND = 'Shri Mahaveerji Digamber Jain Atishay Kshetra';
-const BRAND_Hindi = 'दिगम्बर जैन अतिशय क्षेत्र श्री महावीर जी';
+const BRAND_Hindi = 'Digambar Jain Atishay Kshetra Shri Mahaveer JI';
+
+const ENTRY_TYPE_LABELS: Record<string, string> = { DAMAGE: 'Damage', VENDOR_RETURN: 'Vendor Return' };
+const CONDITION_LABELS: Record<string, string> = { GOOD: 'Good', DAMAGED: 'Damaged', FAIR: 'Fair', POOR: 'Poor' };
+const TRANSACTION_TYPE_LABELS: Record<string, string> = {
+  RECEIPT: 'Receipt', ISSUE: 'Issue', TRANSFER: 'Transfer', DAMAGE: 'Damage',
+  REVERSAL: 'Reversal', REPAIR_OUT: 'Repair Out', REPAIR_IN: 'Repair In',
+  INSTALL: 'Install', UNINSTALL: 'Uninstall', SCRAP: 'Scrap',
+  OPENING_BALANCE: 'Opening Balance', PURCHASE: 'Purchase',
+};
 
 // ==================== SHARED COMPONENTS ====================
 
@@ -55,15 +65,6 @@ function PrintFooter() {
       <Typography variant="caption" color="text.secondary">Date: {formatDateDDMMYYYY(new Date())}</Typography>
     </Box>
   );
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const colorMap: Record<string, 'success' | 'warning' | 'error' | 'info'> = {
-    'Normal': 'success', 'Active': 'success', 'Working': 'success',
-    'Low Stock': 'warning', 'Low Stock Alert': 'warning',
-    'Out of Stock': 'error', 'Damaged': 'error', 'Inactive': 'error',
-  };
-  return <Chip label={status} size="small" color={colorMap[status] || 'info'} sx={{ fontWeight: 600, fontSize: '0.7rem' }} />;
 }
 
 function ExportPrintButtons({ onExport, onPrint, label }: { onExport: () => void; onPrint: () => void; label: string }) {
@@ -225,8 +226,8 @@ export function CentralStoreSummaryReport({ data, storeName, fyLabel }: { data: 
 
 export function DharamshalaDistributionReport({ data, deptName, fyLabel }: { data: any[]; deptName: string; fyLabel: string }) {
   const totalReceived = data.reduce((s: number, r: any) => s + (r.totalReceived || 0), 0);
-  const totalAllocated = data.reduce((s: number, r: any) => s + (r.allocatedToRooms || 0), 0);
-  const totalPool = data.reduce((s: number, r: any) => s + (r.poolBalance || 0), 0);
+  const totalConsumed = data.reduce((s: number, r: any) => s + (r.consumed || 0), 0);
+  const totalBalance = data.reduce((s: number, r: any) => s + (r.balanceQty || 0), 0);
 
   const handleExport = async () => {
     try {
@@ -234,11 +235,11 @@ export function DharamshalaDistributionReport({ data, deptName, fyLabel }: { dat
         { header: 'S.No.', key: 'sNo', width: 6 },
         { header: 'Item Code', key: 'itemCode', width: 12 },
         { header: 'Item Name', key: 'itemName', width: 25 },
-        { header: 'Unit', key: 'unitName', width: 8 },
-        { header: 'Received from Store', key: 'totalReceived', width: 16 },
-        { header: 'Allocated to Rooms', key: 'allocatedToRooms', width: 16 },
-        { header: 'Room Breakdown', key: 'roomBreakdown', width: 40 },
-        { header: 'Pool Balance', key: 'poolBalance', width: 14 },
+        { header: 'Category', key: 'categoryName', width: 15 },
+        { header: 'Location', key: 'locationName', width: 20 },
+        { header: 'Received', key: 'totalReceived', width: 12 },
+        { header: 'Consumed', key: 'consumed', width: 12 },
+        { header: 'Balance', key: 'balanceQty', width: 12 },
       ];
       await exportToExcel(data.map((r, i) => ({ ...r, sNo: i + 1 })), cols, `Dharamshala_Distribution_${deptName}`);
       toast.success(`Exported ${data.length} items`);
@@ -248,8 +249,8 @@ export function DharamshalaDistributionReport({ data, deptName, fyLabel }: { dat
   const handlePrint = () => {
     const pw = window.open('', '_blank');
     if (!pw) return;
-    const rows = data.map((r, i) => `<tr><td>${i + 1}</td><td>${r.itemCode}</td><td>${r.itemName}</td><td>${r.unitName}</td><td>${r.totalReceived}</td><td>${r.allocatedToRooms}</td><td>${r.roomBreakdown}</td><td>${r.poolBalance}</td></tr>`).join('');
-    pw.document.write(`<html><head><title>Dharamshala Distribution</title><style>body{font-family:sans-serif;margin:20px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #E2E8F0;padding:6px 10px;text-align:left;font-size:11px}th{background:#1A365D;color:#fff;font-weight:600}.h{text-align:center;margin-bottom:12px}.h h2{margin:0;font-size:16px;color:#1A365D}.h p{margin:4px 0 0;font-size:12px;color:#64748B}@media print{body{margin:10px}}</style></head><body><div class="h"><h2>${BRAND_Hindi}</h2><p>Dharamshala Distribution — ${deptName} — FY ${fyLabel}</p></div><table><thead><tr><th>#</th><th>Code</th><th>Item</th><th>Unit</th><th>Received</th><th>Allocated</th><th>Room Breakdown</th><th>Pool Balance</th></tr></thead><tbody>${rows}</tbody></table><div style="margin-top:24px;display:flex;justify-content:space-between;font-size:11px;color:#64748B"><span>Prepared By: ________</span><span>Verified By: ________</span><span>Date: ${formatDateDDMMYYYY(new Date())}</span></div></body></html>`);
+    const rows = data.map((r, i) => `<tr><td>${i + 1}</td><td>${r.itemCode}</td><td>${r.itemName}</td><td>${r.categoryName}</td><td>${r.locationName}</td><td>${r.totalReceived}</td><td>${r.consumed || 0}</td><td>${r.balanceQty}</td></tr>`).join('');
+    pw.document.write(`<html><head><title>Dharamshala Distribution</title><style>body{font-family:sans-serif;margin:20px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #E2E8F0;padding:6px 10px;text-align:left;font-size:11px}th{background:#1A365D;color:#fff;font-weight:600}.h{text-align:center;margin-bottom:12px}.h h2{margin:0;font-size:16px;color:#1A365D}.h p{margin:4px 0 0;font-size:12px;color:#64748B}@media print{body{margin:10px}}</style></head><body><div class="h"><h2>${BRAND_Hindi}</h2><p>Dharamshala Distribution — ${deptName} — FY ${fyLabel}</p></div><table><thead><tr><th>#</th><th>Code</th><th>Item</th><th>Category</th><th>Location</th><th>Received</th><th>Consumed</th><th>Balance</th></tr></thead><tbody>${rows}</tbody></table><div style="margin-top:24px;display:flex;justify-content:space-between;font-size:11px;color:#64748B"><span>Prepared By: ________</span><span>Verified By: ________</span><span>Date: ${formatDateDDMMYYYY(new Date())}</span></div></body></html>`);
     pw.document.close();
     pw.print();
   };
@@ -259,23 +260,23 @@ export function DharamshalaDistributionReport({ data, deptName, fyLabel }: { dat
       <ReportHeader title="Dharamshala Level Stock & Distribution" subtitle={`${deptName} — FY ${fyLabel}`} />
       <Stack direction="row" spacing={2} mb={2}>
         <KpiCard title="Total Received" value={totalReceived} icon={<TrendingUp />} color="#2563EB" />
-        <KpiCard title="Allocated to Rooms" value={totalAllocated} icon={<Inventory />} color="#16A34A" />
-        <KpiCard title="Pool Balance (Unallocated)" value={totalPool} icon={<Assessment />} color="#D97706" />
+        <KpiCard title="Total Consumed" value={totalConsumed} icon={<Inventory />} color="#F97316" />
+        <KpiCard title="Current Balance" value={totalBalance} icon={<Assessment />} color="#D97706" />
       </Stack>
       <ExportPrintButtons onExport={handleExport} onPrint={handlePrint} label={`${data.length} items`} />
       <PaginatedTable
-        headers={['#', 'Code', 'Item Name', 'Unit', 'Received', 'Allocated', 'Room Breakdown', 'Pool Balance']}
+        headers={['#', 'Code', 'Item Name', 'Category', 'Location', 'Received', 'Consumed', 'Balance']}
         rows={data}
         renderRow={(r, i) => (
           <>
             <TableCell align="center">{i + 1}</TableCell>
             <TableCell>{r.itemCode}</TableCell>
             <TableCell>{r.itemName}</TableCell>
-            <TableCell>{r.unitName}</TableCell>
+            <TableCell>{r.categoryName}</TableCell>
+            <TableCell>{r.locationName}</TableCell>
             <TableCell align="center">{r.totalReceived}</TableCell>
-            <TableCell align="center">{r.allocatedToRooms}</TableCell>
-            <TableCell sx={{ fontSize: '0.75rem', maxWidth: 300 }}>{r.roomBreakdown}</TableCell>
-            <TableCell align="center" sx={{ fontWeight: 600, color: r.poolBalance > 0 ? 'warning.main' : 'text.secondary' }}>{r.poolBalance}</TableCell>
+            <TableCell align="center" sx={{ color: r.consumed > 0 ? 'warning.main' : 'text.secondary' }}>{r.consumed || 0}</TableCell>
+            <TableCell align="center" sx={{ fontWeight: 600, color: r.balanceQty > 0 ? 'warning.main' : 'text.secondary' }}>{r.balanceQty}</TableCell>
           </>
         )}
       />
@@ -485,7 +486,7 @@ export function DamageScrapReturnsReport({ data, fyLabel }: { data: any[]; fyLab
             <TableCell align="center">{i + 1}</TableCell>
             <TableCell>{formatDateDDMMYYYY(new Date(r.date))}</TableCell>
             <TableCell>
-              <Chip label={r.entryType} size="small" sx={{
+              <Chip label={ENTRY_TYPE_LABELS[r.entryType] || r.entryType} size="small" sx={{
                 fontWeight: 600, fontSize: '0.65rem',
                 bgcolor: r.entryType === 'DAMAGE' ? alpha('#DC2626', 0.1) : alpha('#D97706', 0.1),
                 color: r.entryType === 'DAMAGE' ? '#DC2626' : '#D97706',
@@ -513,7 +514,7 @@ export function ItemLifecycleRenderer({ data }: { data: any[] }) {
 
   return (
     <Box>
-      <ReportHeader title="Item Movement Lifecycle" titleHindi="सामान आवागमन जीवन चक्र" />
+      <ReportHeader title="Item Movement Lifecycle" />
       <TableContainer component={Paper} sx={{ mb: 2 }}>
         <Table size="small">
           <TableHead>
@@ -529,12 +530,12 @@ export function ItemLifecycleRenderer({ data }: { data: any[] }) {
                 <TableCell align="center">{i + 1}</TableCell>
                 <TableCell sx={{ fontSize: '0.75rem' }}>{formatDateDDMMYYYY(new Date(r.date))}</TableCell>
                 <TableCell>
-                  <Chip label={r.transactionType} size="small" sx={{
+                  <Chip label={TRANSACTION_TYPE_LABELS[r.transactionType] || r.transactionType} size="small" sx={{
                     fontWeight: 600, fontSize: '0.6rem',
-                    bgcolor: r.transactionType.includes('IN') || r.transactionType === 'PURCHASE' || r.transactionType === 'OPENING_STOCK'
+                    bgcolor: r.transactionType.includes('IN') || r.transactionType === 'PURCHASE' || r.transactionType === 'OPENING_BALANCE'
                       ? alpha('#16A34A', 0.1) : r.transactionType.includes('OUT') || r.transactionType === 'ISSUE'
                       ? alpha('#DC2626', 0.1) : alpha('#D97706', 0.1),
-                    color: r.transactionType.includes('IN') || r.transactionType === 'PURCHASE' || r.transactionType === 'OPENING_STOCK'
+                    color: r.transactionType.includes('IN') || r.transactionType === 'PURCHASE' || r.transactionType === 'OPENING_BALANCE'
                       ? '#16A34A' : r.transactionType.includes('OUT') || r.transactionType === 'ISSUE'
                       ? '#DC2626' : '#D97706',
                   }} />
@@ -547,7 +548,7 @@ export function ItemLifecycleRenderer({ data }: { data: any[] }) {
                 <TableCell align="right" sx={{ fontWeight: 600 }}>{r.balanceQty}</TableCell>
                 <TableCell sx={{ fontFamily: 'monospace', fontSize: '0.65rem' }}>{r.referenceNo}</TableCell>
                 <TableCell>
-                  <Chip label={r.condition} size="small" sx={{ fontSize: '0.6rem' }}
+                  <Chip label={CONDITION_LABELS[r.condition] || r.condition} size="small" sx={{ fontSize: '0.6rem' }}
                     color={r.condition === 'GOOD' ? 'success' : r.condition === 'DAMAGED' ? 'error' : 'default'} />
                 </TableCell>
               </TableRow>
@@ -570,7 +571,7 @@ export function VisualAnalyticsRenderer({ data }: { data: any[] }) {
 
   return (
     <Box>
-      <ReportHeader title="Visual Analytics Dashboard" titleHindi="दृश्य विश्लेषण डैशबोर्ड" />
+      <ReportHeader title="Visual Analytics Dashboard" />
       <Grid container spacing={3}>
         {analytics.departmentConsumption?.length > 0 && (
           <Grid item xs={12} md={6}>

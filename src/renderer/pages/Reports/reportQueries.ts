@@ -1,4 +1,5 @@
 import { safeNumber } from '../../utils/numberUtils';
+import { formatDateDDMMYYYY, toISODateIST } from '../../utils/dateUtils';
 
 interface ReportQueryParams {
   activeReport: string;
@@ -18,12 +19,14 @@ interface ReportQueryParams {
   selectedAuditTable?: string;
   searchText?: string;
   lowStockOnly?: boolean;
+  selectedStoreId?: number | null;
 }
 
 function buildDateRange(startDate?: string, endDate?: string) {
   if (!startDate && !endDate) return undefined;
-  const sd = startDate ? (() => { const [y, m, d] = startDate.split('-').map(Number); return new Date(y, m - 1, d, 0, 0, 0, 0); })() : undefined;
-  const ed = endDate ? (() => { const [y, m, d] = endDate.split('-').map(Number); return new Date(y, m - 1, d, 23, 59, 59, 999); })() : undefined;
+  // Create IST-boundary dates by parsing YYYY-MM-DD and creating Date objects at IST midnight
+  const sd = startDate ? (() => { const [y, m, d] = startDate.split('-').map(Number); return new Date(Date.UTC(y, m - 1, d, 0, 0, 0, 0) - (5.5 * 60 * 60 * 1000)); })() : undefined;
+  const ed = endDate ? (() => { const [y, m, d] = endDate.split('-').map(Number); return new Date(Date.UTC(y, m - 1, d, 23, 59, 59, 999) - (5.5 * 60 * 60 * 1000)); })() : undefined;
   return { sd, ed };
 }
 
@@ -33,47 +36,62 @@ export async function fetchReportData(params: ReportQueryParams): Promise<any[]>
     activeReport, companyId, financialYearId, selectedItemId, selectedCategoryId,
     selectedDepartment, selectedVendor, selectedLocation, selectedTxType,
     selectedAdjustmentType, selectedStatus, selectedAuditAction, selectedAuditTable,
-    searchText, lowStockOnly,
+    searchText, lowStockOnly, selectedStoreId,
   } = params;
 
   const dateRange = buildDateRange(params.startDate, params.endDate);
   const sd = dateRange?.sd;
   const ed = dateRange?.ed;
-  const where: any = {};
-  const include: any = {};
   const q = searchText?.toLowerCase();
 
+  // Helper: build date filter for LedgerEntry
+  function dateFilter(field = 'transactionDate') {
+    if (!sd && !ed) return {};
+    const f: any = {};
+    if (sd) f.gte = sd;
+    if (ed) f.lte = ed;
+    return { [field]: f };
+  }
+
+  // Helper: build date filter for TransactionHeader
+  function txDateFilter() {
+    return dateFilter('transactionDate');
+  }
+
   switch (activeReport) {
+    // ==================== PURCHASE REPORTS ====================
     case 'receipt_register': {
-      where.companyId = companyId;
-      where.financialYearId = financialYearId;
-      where.status = 'Posted';
-      if (sd || ed) { where.date = {}; if (sd) where.date.gte = sd; if (ed) where.date.lte = ed; }
+      const where: any = { companyId, financialYearId, voucherType: 'RC', approvalStatus: 'POSTED', ...txDateFilter() };
       if (selectedVendor) where.vendorId = Number(selectedVendor);
-      if (selectedStatus) where.status = selectedStatus;
-      include.vendor = true;
-      include.items = { include: { item: true, unit: true } };
-      const data = await api.dbQuery('receiptChallan', 'findMany', { where, include, orderBy: { date: 'asc' }, take: 2000 });
+      if (selectedStatus) where.approvalStatus = selectedStatus;
+      if (selectedStoreId) where.toStoreId = selectedStoreId;
+      const data = await api.dbQuery('transactionHeader', 'findMany', {
+        where,
+        include: { details: { include: { item: true } }, vendor: true, fromStore: true, toStore: true },
+        orderBy: [{ transactionDate: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+        take: 2000,
+      });
       const result: any[] = [];
       for (const r of data as any[]) {
-        const sourceName = r.sourceType === 'Vendor' ? (r.vendor?.name || r.sourceName || '') : (r.sourceName || r.vendor?.name || '');
-        const items = r.items || [];
+        const items = r.details || [];
         if (items.length === 0) {
           result.push({
-            challanNo: r.challanNo, date: r.date, sourceType: r.sourceType, sourceName,
-            invoiceNumber: r.invoiceNumber, invoiceDate: r.invoiceDate, vehicleNumber: r.vehicleNumber,
-            receivedBy: r.receivedBy, remarks: r.remarks, status: r.status, postedAt: r.postedAt,
+            challanNo: r.voucherNo, date: r.transactionDate, sourceType: 'Vendor',
+            sourceName: r.vendor?.vendorName || '', vehicleNumber: r.vehicleNumber,
+            receivedBy: r.receivedBy, remarks: r.remarks, status: r.approvalStatus,
             itemName: '', itemCode: '', quantity: 0, rate: 0, amount: 0, unitName: '',
+            storeName: r.toStore?.name || '',
           });
         } else {
           for (const item of items) {
             result.push({
-              challanNo: r.challanNo, date: r.date, sourceType: r.sourceType, sourceName,
-              invoiceNumber: r.invoiceNumber, invoiceDate: r.invoiceDate, vehicleNumber: r.vehicleNumber,
-              receivedBy: r.receivedBy, remarks: r.remarks, status: r.status, postedAt: r.postedAt,
+              challanNo: r.voucherNo, date: r.transactionDate, sourceType: 'Vendor',
+              sourceName: r.vendor?.vendorName || '', vehicleNumber: r.vehicleNumber,
+              receivedBy: r.receivedBy, remarks: r.remarks, status: r.approvalStatus,
               itemName: item.item?.itemName || '', itemCode: item.item?.itemCode || '',
-              quantity: Number(item.quantity || 0), rate: Number(item.rate || 0), amount: Number(item.amount || 0),
-              unitName: item.unit?.name || '',
+              quantity: Number(item.quantity || 0), rate: Number(item.rate || 0),
+              amount: Number(item.amount || 0), unitName: '',
+              storeName: r.toStore?.name || '',
             });
           }
         }
@@ -81,1046 +99,1205 @@ export async function fetchReportData(params: ReportQueryParams): Promise<any[]>
       if (q) return result.filter((r: any) => r.challanNo?.toLowerCase().includes(q) || r.sourceName?.toLowerCase().includes(q) || r.itemName?.toLowerCase().includes(q));
       return result;
     }
-    case 'issue_register': {
-      where.companyId = companyId;
-      where.financialYearId = financialYearId;
-      where.status = 'Posted';
-      if (sd || ed) { where.date = {}; if (sd) where.date.gte = sd; if (ed) where.date.lte = ed; }
-      if (selectedDepartment) where.departmentId = Number(selectedDepartment);
-      if (selectedStatus) where.status = selectedStatus;
-      include.department = true;
-      include.items = { include: { item: true, unit: true } };
-      const data = await api.dbQuery('issueChallan', 'findMany', { where, include, orderBy: { date: 'asc' }, take: 2000 });
-      if (q) return data.filter((r: any) => r.challanNo?.toLowerCase().includes(q) || r.department?.name?.toLowerCase().includes(q));
-      return data;
-    }
-    case 'stock_ledger': {
-      where.companyId = companyId;
-      where.financialYearId = financialYearId;
-      if (sd || ed) { where.transactionDate = {}; if (sd) where.transactionDate.gte = sd; if (ed) where.transactionDate.lte = ed; }
-      if (selectedItemId) where.itemId = selectedItemId;
-      if (selectedDepartment) where.departmentId = Number(selectedDepartment);
-      if (selectedTxType) where.transactionType = selectedTxType;
-      include.item = true;
-      include.department = true;
-      include.location = true;
-      const data = await api.dbQuery('stockTransaction', 'findMany', { where, include, orderBy: { transactionDate: 'desc' }, take: 1000 });
 
-      const receiptIds = [...new Set(data.filter((t: any) => t.referenceType === 'ReceiptChallan' && t.referenceId).map((t: any) => t.referenceId))];
-      const vendorMap = new Map<number, string>();
-      if (receiptIds.length > 0) {
-        const receipts = await api.dbQuery('receiptChallan', 'findMany', { where: { id: { in: receiptIds } }, include: { vendor: true } });
-        receipts.forEach((r: any) => vendorMap.set(r.id, r.vendor?.name || r.sourceName || ''));
-      }
-
-      let result = data.map((t: any) => ({
-        ...t,
-        vendorName: t.referenceType === 'ReceiptChallan' && t.referenceId ? (vendorMap.get(t.referenceId) || '') : '',
-      }));
-
-      if (q) result = result.filter((r: any) => r.itemName?.toLowerCase().includes(q) || r.vendorName?.toLowerCase().includes(q) || r.referenceNo?.toLowerCase().includes(q));
-      return result;
-    }
-    case 'current_stock_custom': {
-      where.companyId = companyId;
-      where.financialYearId = financialYearId;
-      if (selectedCategoryId) {
-        // If category name matches a department name, also filter by that department
-        const categories = await api.dbQuery('itemCategory', 'findMany', { where: { isActive: true } });
-        const departments = await api.dbQuery('department', 'findMany', { where: { companyId } });
-        const selectedCat = categories.find((c: any) => c.id === Number(selectedCategoryId));
-        const matchingDept = selectedCat ? departments.find((d: any) => d.name === selectedCat.name) : null;
-        if (matchingDept) {
-          where.departmentId = matchingDept.id;
-        } else {
-          where.item = { categoryId: Number(selectedCategoryId) };
-        }
-      }
-      if (selectedDepartment) where.departmentId = Number(selectedDepartment);
-
-      // Simple query: all stock transactions with item + category + department
-      const data = await api.dbQuery('stockTransaction', 'findMany', { 
-        where, 
-        include: { 
-          item: { include: { category: true, unit: true } }, 
-          department: true,
-        },
-        orderBy: { transactionDate: 'asc' } 
-      });
-
-      // Aggregate by item + department (not just item, to avoid double-counting across depts)
-      const summary: Record<string, any> = {};
-      
-      data.forEach((t: any) => {
-        const key = `${t.itemId}-${t.departmentId}`;
-        if (!summary[key]) {
-          summary[key] = { 
-            item: t.item, 
-            department: t.department,
-            totalIn: 0, 
-            totalOut: 0,
-            rateSum: 0,
-            rateCount: 0,
-          };
-        }
-        const qtyIn = safeNumber(t.quantityIn);
-        const qtyOut = safeNumber(t.quantityOut);
-        const rate = safeNumber(t.rate);
-        summary[key].totalIn += qtyIn;
-        summary[key].totalOut += qtyOut;
-        // Weighted avg rate: only from qtyIn with rate > 0
-        if (qtyIn > 0 && rate > 0) {
-          summary[key].rateSum += qtyIn * rate;
-          summary[key].rateCount += qtyIn;
-        }
-      });
-      
-      let sNo = 1;
-      let result = Object.values(summary).map((s: any) => {
-        const stockQty = s.totalIn - s.totalOut;
-        const avgRate = s.rateCount > 0 ? s.rateSum / s.rateCount : 0;
-        const totalValue = stockQty * avgRate;
-        
-        return {
-          _itemId: s.item.id,
-          sNo: sNo++,
-          itemCode: s.item.itemCode || '',
-          itemName: s.item.itemName,
-          categoryName: s.item.category?.name || '',
-          departmentName: s.department?.name || '',
-          unitName: s.item.unit?.name || '',
-          totalIn: s.totalIn,
-          totalOut: s.totalOut,
-          rate: Math.round(avgRate * 100) / 100,
-          stockQty,
-          total: Math.round(totalValue * 100) / 100,
-        };
-      }).filter((r: any) => r.stockQty !== 0 || r.totalIn > 0);
-      
-      if (q) result = result.filter((r: any) => r.itemName?.toLowerCase().includes(q) || r.itemCode?.toLowerCase().includes(q));
-      return result;
-    }
-    case 'stock_distribution': {
-      where.companyId = companyId;
-      where.financialYearId = financialYearId;
-      if (selectedItemId) where.itemId = selectedItemId;
-      if (selectedCategoryId) where.item = { categoryId: selectedCategoryId };
-      if (selectedDepartment) where.departmentId = Number(selectedDepartment);
-      if (selectedLocation) where.locationId = Number(selectedLocation);
-      const data = await api.dbQuery('stockTransaction', 'findMany', { where, select: {
-        itemId: true, departmentId: true, quantityIn: true, quantityOut: true, transactionDate: true,
-        item: { include: { category: true, unit: true } },
-        department: true,
-      }, orderBy: { transactionDate: 'desc' } });
-      const summary: Record<string, any> = {};
-      data.forEach((t: any) => {
-        const key = `${t.itemId}-${t.departmentId}`;
-        if (!summary[key]) summary[key] = { item: t.item, department: t.department, totalIn: 0, totalOut: 0, lastDate: t.transactionDate };
-        summary[key].totalIn += Number(t.quantityIn || 0);
-        summary[key].totalOut += Number(t.quantityOut || 0);
-      });
-      let result = Object.values(summary).map((s: any) => ({
-        ...s.item, departmentName: s.department?.name || '', totalReceived: s.totalIn, totalIssued: s.totalOut, currentStock: s.totalIn - s.totalOut, lastMovement: s.lastDate,
-      }));
-      if (lowStockOnly) result = result.filter((r: any) => r.currentStock < Number(r.minimumStockLevel || 0));
-      if (q) result = result.filter((r: any) => r.itemName?.toLowerCase().includes(q) || r.itemCode?.toLowerCase().includes(q));
-      return result;
-    }
-    case 'low_stock': {
-      where.companyId = companyId;
-      where.financialYearId = financialYearId;
-      if (selectedItemId) where.itemId = selectedItemId;
-      if (selectedCategoryId) where.item = { categoryId: selectedCategoryId };
-      if (selectedDepartment) where.departmentId = Number(selectedDepartment);
-      include.item = { include: { category: true, unit: true } };
-      const data = await api.dbQuery('stockTransaction', 'findMany', { where, include, orderBy: { transactionDate: 'desc' } });
-      const summary: Record<string, any> = {};
-      data.forEach((t: any) => {
-        const key = t.itemId;
-        if (!summary[key]) summary[key] = { item: t.item, totalIn: 0, totalOut: 0 };
-        summary[key].totalIn += Number(t.quantityIn || 0);
-        summary[key].totalOut += Number(t.quantityOut || 0);
-      });
-      let result = Object.values(summary)
-        .map((s: any) => ({ ...s.item, currentStock: s.totalIn - s.totalOut }))
-        .filter((r: any) => Number(r.minimumStockLevel || 0) > 0 && r.currentStock < Number(r.minimumStockLevel));
-      if (q) result = result.filter((r: any) => r.itemName?.toLowerCase().includes(q) || r.itemCode?.toLowerCase().includes(q));
-      return result;
-    }
-    case 'dead_stock': {
-      where.companyId = companyId;
-      where.financialYearId = financialYearId;
-      if (selectedItemId) where.itemId = selectedItemId;
-      if (selectedCategoryId) where.item = { categoryId: selectedCategoryId };
-      if (selectedDepartment) where.departmentId = Number(selectedDepartment);
-      include.item = { include: { category: true, unit: true } };
-      const data = await api.dbQuery('stockTransaction', 'findMany', { where, include, orderBy: { transactionDate: 'desc' }, take: 2000 });
-      const summary: Record<string, any> = {};
-      data.forEach((t: any) => {
-        const key = t.itemId;
-        if (!summary[key]) summary[key] = { item: t.item, totalIn: 0, totalOut: 0, lastDate: t.transactionDate };
-        summary[key].totalIn += Number(t.quantityIn || 0);
-        summary[key].totalOut += Number(t.quantityOut || 0);
-        if (new Date(t.transactionDate) > new Date(summary[key].lastDate)) summary[key].lastDate = t.transactionDate;
-      });
-      let result = Object.values(summary)
-        .map((s: any) => ({ ...s.item, currentStock: s.totalIn - s.totalOut, lastMovement: s.lastDate }))
-        .filter((r: any) => r.currentStock > 0);
-      if (q) result = result.filter((r: any) => r.itemName?.toLowerCase().includes(q) || r.itemCode?.toLowerCase().includes(q));
-      return result;
-    }
-    case 'damage_report': {
-      where.companyId = companyId;
-      if (sd || ed) { where.date = {}; if (sd) where.date.gte = sd; if (ed) where.date.lte = ed; }
-      if (selectedItemId) where.itemId = selectedItemId;
-      if (selectedLocation) where.locationId = Number(selectedLocation);
-      if (selectedStatus) where.status = selectedStatus;
-      include.item = true;
-      include.location = true;
-      const data = await api.dbQuery('damageEntry', 'findMany', { where, include, orderBy: { date: 'desc' }, take: 2000 });
-      if (q) return data.filter((r: any) => r.item?.itemName?.toLowerCase().includes(q) || r.reason?.toLowerCase().includes(q));
-      return data;
-    }
-    case 'department_wise': {
-      where.companyId = companyId;
-      where.financialYearId = financialYearId;
-      where.departmentId = { not: null };
-      if (sd || ed) { where.transactionDate = {}; if (sd) where.transactionDate.gte = sd; if (ed) where.transactionDate.lte = ed; }
-      if (selectedDepartment) where.departmentId = Number(selectedDepartment);
-      if (selectedItemId) where.itemId = selectedItemId;
-      if (selectedTxType) where.transactionType = selectedTxType;
-      include.department = true;
-      include.item = true;
-      return api.dbQuery('stockTransaction', 'findMany', { where, include, orderBy: { transactionDate: 'desc' } });
-    }
-    case 'department_stock_status': {
-      if (!selectedDepartment) return [];
-      where.companyId = companyId;
-      where.financialYearId = financialYearId;
-      where.departmentId = Number(selectedDepartment);
-      
-      const data = await api.dbQuery('stockTransaction', 'findMany', { 
-        where, 
-        include: { item: true, location: true }, 
-        orderBy: { transactionDate: 'asc' } 
-      });
-
-      const summary: Record<string, any> = {};
-      data.forEach((t: any) => {
-        const key = t.itemId;
-        if (!summary[key]) {
-          summary[key] = {
-            item: t.item,
-            totalIn: 0,
-            totalOut: 0,
-            deptQty: 0,
-            rooms: {}
-          };
-        }
-        const qtyIn = Number(t.quantityIn || 0);
-        const qtyOut = Number(t.quantityOut || 0);
-        const roomName = t.location?.locationName || null;
-
-        if (t.transactionType === 'ISSUE') {
-          if (qtyIn > 0) {
-            if (roomName) {
-              summary[key].rooms[roomName] = (summary[key].rooms[roomName] || 0) + qtyIn;
-            } else {
-              summary[key].totalIn += qtyIn;
-              summary[key].deptQty += qtyIn;
-            }
-          } else {
-            summary[key].totalOut += qtyOut;
-            if (roomName) {
-              summary[key].rooms[roomName] = (summary[key].rooms[roomName] || 0) - qtyOut;
-            } else {
-              summary[key].deptQty -= qtyOut;
-            }
-          }
-        } else if (t.transactionType === 'TRANSFER_OUT') {
-          if (roomName) {
-            summary[key].rooms[roomName] = (summary[key].rooms[roomName] || 0) - qtyOut;
-          } else {
-            summary[key].totalOut += qtyOut;
-            summary[key].deptQty -= qtyOut;
-          }
-        } else if (t.transactionType === 'TRANSFER_IN') {
-          if (roomName) {
-            summary[key].rooms[roomName] = (summary[key].rooms[roomName] || 0) + qtyIn;
-          } else {
-            summary[key].totalIn += qtyIn;
-            summary[key].deptQty += qtyIn;
-          }
-        } else {
-          summary[key].totalIn += qtyIn;
-          summary[key].totalOut += qtyOut;
-          if (roomName) {
-            summary[key].rooms[roomName] = (summary[key].rooms[roomName] || 0) + qtyIn - qtyOut;
-          } else {
-            summary[key].deptQty += qtyIn - qtyOut;
-          }
-        }
-      });
-
-      let sNo = 1;
-      let result = Object.values(summary).map((s: any) => {
-        const balanceQty = s.deptQty;
-        const roomEntries = Object.entries(s.rooms).filter(([_, v]: any) => v > 0);
-        const rooms = roomEntries.map(([name, qty]: any) => `${name}(${qty})`).join(', ');
-        return {
-          _itemId: s.item.id,
-          sNo: sNo++,
-          itemName: s.item.itemName,
-          itemCode: s.item.itemCode || '',
-          totalQty: s.totalIn,
-          rooms: rooms || '-',
-          balanceQty: balanceQty
-        };
-      }).filter((r: any) => r.totalQty > 0 || r.balanceQty > 0);
-
-      if (q) result = result.filter((r: any) => r.itemName?.toLowerCase().includes(q));
-      return result;
-    }
     case 'vendor_purchase': {
-      where.companyId = companyId;
-      where.financialYearId = financialYearId;
-      where.status = 'Posted';
-      where.sourceType = 'Vendor';
-      if (sd || ed) { where.date = {}; if (sd) where.date.gte = sd; if (ed) where.date.lte = ed; }
+      const where: any = { companyId, financialYearId, voucherType: 'RC', approvalStatus: 'POSTED', ...txDateFilter() };
       if (selectedVendor) where.vendorId = Number(selectedVendor);
-      include.vendor = true;
-      include.items = { include: { item: true } };
-      const data = await api.dbQuery('receiptChallan', 'findMany', { where, include, orderBy: { date: 'asc' }, take: 2000 });
-      if (q) return data.filter((r: any) => r.challanNo?.toLowerCase().includes(q) || r.vendor?.name?.toLowerCase().includes(q));
-      return data;
-    }
-    case 'item_history': {
-      where.companyId = companyId;
-      where.financialYearId = financialYearId;
-      if (sd || ed) { where.transactionDate = {}; if (sd) where.transactionDate.gte = sd; if (ed) where.transactionDate.lte = ed; }
-      if (selectedItemId) where.itemId = selectedItemId;
-      if (selectedDepartment) where.departmentId = Number(selectedDepartment);
-      const txns = await api.dbQuery('stockTransaction', 'findMany', {
+      const data = await api.dbQuery('transactionHeader', 'findMany', {
         where,
-        include: { item: true, department: true, location: true },
-        orderBy: { transactionDate: 'asc' },
+        include: { details: { include: { item: true } }, vendor: true },
+        orderBy: [{ transactionDate: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+        take: 2000,
       });
-
-      const TX_LABELS: Record<string, string> = {
-        PURCHASE: 'Purchase', ISSUE: 'Issue', TRANSFER_IN: 'Transfer In', TRANSFER_OUT: 'Transfer Out',
-        REVERSAL: 'Reversal', ADJUSTMENT_IN: 'Adjustment In', ADJUSTMENT_OUT: 'Adjustment Out',
-        DAMAGE: 'Damage', VENDOR_RETURN: 'Vendor Return', OPENING_STOCK: 'Opening Stock',
-        RETURN_IN: 'Return In', RETURN_OUT: 'Return Out',
-      };
-
-      let runningBalance = 0;
-      const result = txns.map((txn: any) => {
-        const qtyIn = Number(txn.quantityIn || 0);
-        const qtyOut = Number(txn.quantityOut || 0);
-        runningBalance += qtyIn - qtyOut;
-
-        let source = '-';
-        let destination = '-';
-        if (txn.transactionType === 'PURCHASE' || txn.transactionType === 'OPENING_STOCK') {
-          source = txn.remarks || 'External';
-          destination = txn.department?.name || 'Store';
-        } else if (txn.transactionType === 'ISSUE') {
-          if (qtyOut > 0) {
-            source = txn.department?.name || 'Store';
-            destination = txn.remarks || '-';
-          } else {
-            source = txn.remarks || '-';
-            destination = txn.department?.name || '-';
-          }
-        } else if (txn.transactionType === 'TRANSFER_OUT') {
-          source = `${txn.department?.name || ''}${txn.location ? '/' + txn.location.locationName : ''}`;
-          destination = txn.remarks || '-';
-        } else if (txn.transactionType === 'TRANSFER_IN') {
-          source = txn.remarks || '-';
-          destination = `${txn.department?.name || ''}${txn.location ? '/' + txn.location.locationName : ''}`;
-        } else if (txn.transactionType === 'DAMAGE') {
-          source = txn.department?.name || '-';
-          destination = 'Scrap';
-        } else if (txn.transactionType === 'VENDOR_RETURN') {
-          source = txn.department?.name || '-';
-          destination = 'Vendor';
-        } else {
-          source = txn.department?.name || '-';
-          destination = txn.location?.locationName || '-';
-        }
-
-        return {
-          _id: txn.id,
-          date: txn.transactionDate,
-          referenceNo: txn.referenceNo || '-',
-          transactionType: TX_LABELS[txn.transactionType] || txn.transactionType,
-          item: txn.item?.itemName || '-',
-          department: txn.department?.name || '-',
-          location: txn.location?.locationName || '-',
-          source,
-          destination,
-          quantityIn: qtyIn,
-          quantityOut: qtyOut,
-          balanceQty: runningBalance,
-          remarks: txn.remarks || '-',
-        };
-      });
-
-      if (q) return result.filter((r: any) => r.item?.toLowerCase().includes(q) || r.department?.toLowerCase().includes(q) || r.referenceNo?.toLowerCase().includes(q));
-      return result.reverse();
-    }
-    case 'movement_register': {
-      where.companyId = companyId;
-      where.financialYearId = financialYearId;
-      if (sd || ed) { where.transactionDate = {}; if (sd) where.transactionDate.gte = sd; if (ed) where.transactionDate.lte = ed; }
-      if (selectedItemId) where.itemId = selectedItemId;
-      if (selectedDepartment) where.departmentId = Number(selectedDepartment);
-      if (selectedTxType) where.transactionType = selectedTxType;
-      include.item = true;
-      include.department = true;
-      const data = await api.dbQuery('stockTransaction', 'findMany', { where, include, orderBy: { transactionDate: 'asc' } });
-      if (q) return data.filter((t: any) => t.item?.itemName?.toLowerCase().includes(q) || t.department?.name?.toLowerCase().includes(q));
+      if (q) return (data as any[]).filter((r: any) => r.voucherNo?.toLowerCase().includes(q) || r.vendor?.vendorName?.toLowerCase().includes(q));
       return data;
     }
-    case 'transfer_register': {
-      where.companyId = companyId;
-      where.financialYearId = financialYearId;
-      where.status = 'Posted';
-      if (sd || ed) { where.date = {}; if (sd) where.date.gte = sd; if (ed) where.date.lte = ed; }
-      if (selectedDepartment) {
-        where.OR = [{ fromDepartmentId: Number(selectedDepartment) }, { toDepartmentId: Number(selectedDepartment) }];
-      }
-      include.fromDepartment = true;
-      include.toDepartment = true;
-      include.items = { include: { item: true } };
-      const data = await api.dbQuery('transferChallan', 'findMany', { where, include, orderBy: { date: 'asc' }, take: 2000 });
-      if (q) return data.filter((r: any) => r.challanNo?.toLowerCase().includes(q) || r.fromDepartment?.name?.toLowerCase().includes(q) || r.toDepartment?.name?.toLowerCase().includes(q));
-      return data;
-    }
+
     case 'vendor_returns': {
-      where.companyId = companyId;
-      where.financialYearId = financialYearId;
-      where.status = 'Posted';
-      if (sd || ed) { where.date = {}; if (sd) where.date.gte = sd; if (ed) where.date.lte = ed; }
+      const where: any = { companyId, financialYearId, voucherType: 'VR', approvalStatus: 'POSTED', ...txDateFilter() };
       if (selectedVendor) where.vendorId = Number(selectedVendor);
-      include.vendor = true;
-      include.items = { include: { item: true } };
-      const data = await api.dbQuery('vendorReturnChallan', 'findMany', { where, include, orderBy: { date: 'asc' }, take: 2000 });
-      if (q) return data.filter((r: any) => r.challanNo?.toLowerCase().includes(q) || r.vendor?.name?.toLowerCase().includes(q));
+      const data = await api.dbQuery('transactionHeader', 'findMany', {
+        where,
+        include: { details: { include: { item: true } }, vendor: true },
+        orderBy: [{ transactionDate: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+        take: 2000,
+      });
+      if (q) return (data as any[]).filter((r: any) => r.voucherNo?.toLowerCase().includes(q) || r.vendor?.vendorName?.toLowerCase().includes(q));
       return data;
     }
+
     case 'purchase_history': {
-      where.companyId = companyId;
-      where.financialYearId = financialYearId;
-      where.transactionType = { in: ['PURCHASE', 'RECEIPT', 'OPENING_STOCK'] };
-      if (selectedItemId) where.itemId = selectedItemId;
-      if (selectedCategoryId) where.item = { categoryId: selectedCategoryId };
-      if (sd || ed) { where.transactionDate = {}; if (sd) where.transactionDate.gte = sd; if (ed) where.transactionDate.lte = ed; }
-      include.item = { include: { unit: true } };
-      include.department = true;
-      const data = await api.dbQuery('stockTransaction', 'findMany', { where, include, orderBy: [{ itemId: 'asc' }, { transactionDate: 'asc' }, { id: 'asc' }] });
-      const itemGroups: Record<number, any[]> = {};
-      data.forEach((t: any) => {
-        if (!itemGroups[t.itemId]) itemGroups[t.itemId] = [];
-        itemGroups[t.itemId].push(t);
+      const where: any = { companyId, financialYearId, voucherType: 'RC', ...txDateFilter() };
+      if (selectedItemId) where.details = { some: { itemId: Number(selectedItemId) } };
+      if (selectedCategoryId) where.details = { some: { item: { categoryId: Number(selectedCategoryId) } } };
+      const data = await api.dbQuery('transactionHeader', 'findMany', {
+        where,
+        include: { details: { include: { item: { include: { unit: true } } } }, vendor: true },
+        orderBy: [{ transactionDate: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
       });
       const result: any[] = [];
       let sNo = 1;
-      Object.entries(itemGroups).forEach(([itemId, txns]) => {
-        let cumulativeQty = 0;
-        let cumulativeValue = 0;
-        txns.forEach((txn: any) => {
-          const qty = Number(txn.quantityIn || 0) - Number(txn.quantityOut || 0);
-          cumulativeQty += Math.abs(qty);
-          cumulativeValue += Math.abs(qty) * Number(txn.rate || 0);
+      let cumulativeQty = 0;
+      let cumulativeValue = 0;
+      for (const r of data as any[]) {
+        for (const d of r.details || []) {
+          const qty = Number(d.quantity || 0);
+          cumulativeQty += qty;
+          cumulativeValue += qty * Number(d.rate || 0);
           result.push({
             sNo: sNo++,
-            itemCode: txn.item?.itemCode || '',
-            itemName: txn.item?.itemName || '',
-            dateFormatted: txn.transactionDate ? new Date(txn.transactionDate).toLocaleDateString('en-IN') : '',
-            challanNo: txn.referenceNo || '',
-            storeName: txn.department?.name || '',
-            qty: qty > 0 ? `+${qty}` : qty < 0 ? `${qty}` : '0',
-            rate: Number(txn.rate || 0),
-            total: Math.abs(qty) * Number(txn.rate || 0),
+            itemCode: d.item?.itemCode || '',
+            itemName: d.item?.itemName || '',
+            dateFormatted: r.transactionDate ? formatDateDDMMYYYY(r.transactionDate) : '',
+            challanNo: r.voucherNo || '',
+            storeName: r.vendor?.vendorName || '',
+            qty: `+${qty}`,
+            rate: Number(d.rate || 0),
+            total: qty * Number(d.rate || 0),
             totalQty: cumulativeQty,
             avgRate: cumulativeQty > 0 ? cumulativeValue / cumulativeQty : 0,
           });
-        });
-      });
+        }
+      }
       if (q) return result.filter((r: any) => r.itemName?.toLowerCase().includes(q) || r.itemCode?.toLowerCase().includes(q));
       return result;
     }
-    case 'stock_adjustments': {
-      where.companyId = companyId;
-      where.financialYearId = financialYearId;
-      if (sd || ed) { where.date = {}; if (sd) where.date.gte = sd; if (ed) where.date.lte = ed; }
-      if (selectedItemId) where.itemId = selectedItemId;
-      if (selectedAdjustmentType) where.adjustmentType = selectedAdjustmentType;
-      include.item = true;
-      const data = await api.dbQuery('stockAdjustment', 'findMany', { where, include, orderBy: { date: 'desc' }, take: 2000 });
-      if (q) return data.filter((r: any) => r.item?.itemName?.toLowerCase().includes(q) || r.reason?.toLowerCase().includes(q));
+
+    // ==================== ISSUE REPORTS ====================
+    case 'issue_register': {
+      const where: any = { companyId, financialYearId, voucherType: 'IC', approvalStatus: 'POSTED', ...txDateFilter() };
+      if (selectedDepartment) where.departmentId = Number(selectedDepartment);
+      const data = await api.dbQuery('transactionHeader', 'findMany', {
+        where,
+        include: { details: { include: { item: true } }, fromStore: true, toStore: true },
+        orderBy: [{ transactionDate: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+        take: 2000,
+      });
+      if (q) return (data as any[]).filter((r: any) => r.voucherNo?.toLowerCase().includes(q) || r.fromStore?.name?.toLowerCase().includes(q));
       return data;
     }
-    case 'audit_log': {
-      where.companyId = companyId;
-      if (sd || ed) { where.createdAt = {}; if (sd) where.createdAt.gte = sd; if (ed) where.createdAt.lte = ed; }
-      if (selectedAuditAction) where.action = selectedAuditAction;
-      if (selectedAuditTable) where.tableName = selectedAuditTable;
-      const data = await api.dbQuery('auditLog', 'findMany', { where, orderBy: { createdAt: 'desc' }, take: 2000 });
-      if (q) return data.filter((r: any) => r.action?.toLowerCase().includes(q) || r.tableName?.toLowerCase().includes(q) || r.description?.toLowerCase().includes(q));
+
+    case 'department_wise': {
+      const where: any = { companyId, financialYearId, voucherType: 'IC', ...txDateFilter() };
+      if (selectedDepartment) where.departmentId = Number(selectedDepartment);
+      const data = await api.dbQuery('transactionHeader', 'findMany', {
+        where,
+        include: { details: { include: { item: true } }, fromStore: true, toStore: true },
+        orderBy: [{ transactionDate: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+      });
+      if (q) return (data as any[]).filter((r: any) => r.voucherNo?.toLowerCase().includes(q));
       return data;
     }
-    case 'dharamshala_items': {
-      where.companyId = companyId;
-      where.financialYearId = financialYearId;
-      const data = await api.dbQuery('stockTransaction', 'findMany', { where: {
-        companyId, financialYearId,
-        location: { locationType: 'Dharamshala' },
-      }, select: {
-        itemId: true, quantityIn: true, quantityOut: true,
-        item: { include: { category: true, unit: true } },
-      }, orderBy: { transactionDate: 'desc' } });
-      const summary: Record<string, any> = {};
-      data.forEach((t: any) => {
-        const key = t.itemId;
-        if (!summary[key]) summary[key] = { item: t.item, totalIn: 0, totalOut: 0 };
-        summary[key].totalIn += Number(t.quantityIn || 0);
-        summary[key].totalOut += Number(t.quantityOut || 0);
-      });
-      let result = Object.values(summary).map((s: any) => ({ ...s.item, totalReceived: s.totalIn, totalIssued: s.totalOut, currentStock: s.totalIn - s.totalOut }));
-      if (q) result = result.filter((r: any) => r.itemName?.toLowerCase().includes(q) || r.itemCode?.toLowerCase().includes(q));
-      return result;
-    }
 
-    // ==================== ENTERPRISE REPORTS ====================
-
-    case 'central_store_summary': {
-      // Store-level stock & issue summary with destination-wise breakdown
-      const storeId = selectedDepartment ? Number(selectedDepartment) : null;
-      if (!storeId) return [];
-
-      // Get all transactions for this store
-      const txns = await api.dbQuery('stockTransaction', 'findMany', {
-        where: {
-          companyId, financialYearId,
-          departmentId: storeId,
-          ...(sd || ed ? { transactionDate: { ...(sd ? { gte: sd } : {}), ...(ed ? { lte: ed } : {}) } } : {}),
-        },
-        include: { item: { include: { category: true, unit: true } }, department: true, location: true },
-        orderBy: { transactionDate: 'asc' },
-      });
-
-      // Get all ISSUE transactions going OUT from this store (for destination breakdown)
-      const issueTxns = await api.dbQuery('stockTransaction', 'findMany', {
-        where: {
-          companyId, financialYearId,
-          departmentId: storeId,
-          transactionType: 'ISSUE',
-          quantityOut: { gt: 0 },
-          ...(sd || ed ? { transactionDate: { ...(sd ? { gte: sd } : {}), ...(ed ? { lte: ed } : {}) } } : {}),
-        },
-        include: { department: true },
-      });
-
-      // Get issue breakdown: for each item, which departments received stock
-      const issueBreakdown: Record<number, Record<string, number>> = {};
-      for (const txn of issueTxns) {
-        if (!txn.department) continue;
-        // We need to find the paired ISSUE IN row to know the destination
-        // The paired row has same referenceNo and itemId but quantityIn > 0
-        const destTxns = await api.dbQuery('stockTransaction', 'findMany', {
-          where: {
-            companyId, financialYearId,
-            itemId: txn.itemId,
-            referenceNo: txn.referenceNo,
-            transactionType: 'ISSUE',
-            quantityIn: { gt: 0 },
-            departmentId: { not: storeId },
-          },
-          include: { department: true },
-        });
-        for (const dest of destTxns) {
-          if (!dest.department) continue;
-          if (!issueBreakdown[txn.itemId]) issueBreakdown[txn.itemId] = {};
-          const deptName = dest.department.name;
-          issueBreakdown[txn.itemId][deptName] = (issueBreakdown[txn.itemId][deptName] || 0) + Number(txn.quantityOut);
-        }
-      }
-
-      // Aggregate per item
-      const itemMap: Record<number, any> = {};
-      for (const txn of txns) {
-        const iid = txn.itemId;
-        if (!itemMap[iid]) {
-          itemMap[iid] = {
-            _itemId: iid,
-            itemCode: txn.item?.itemCode || '',
-            itemName: txn.item?.itemName || '',
-            categoryName: txn.item?.category?.name || '',
-            unitName: txn.item?.unit?.name || '',
-            minimumStockLevel: Number(txn.item?.minimumStockLevel || 0),
-            totalReceived: 0,
-            totalIssued: 0,
-            damagedQty: 0,
-            issueBreakdown: issueBreakdown[iid] || {},
-          };
-        }
-        const qtyIn = Number(txn.quantityIn || 0);
-        const qtyOut = Number(txn.quantityOut || 0);
-        if (['PURCHASE', 'OPENING_STOCK', 'RECEIPT'].includes(txn.transactionType)) {
-          itemMap[iid].totalReceived += qtyIn;
-        }
-        if (txn.transactionType === 'ISSUE' || txn.transactionType === 'TRANSFER_OUT') {
-          itemMap[iid].totalIssued += qtyOut;
-        }
-        if (txn.transactionType === 'DAMAGE' || txn.condition === 'DAMAGED') {
-          itemMap[iid].damagedQty += qtyOut || qtyIn;
-        }
-      }
-
-      const items = Object.values(itemMap).map((item: any) => ({
-        ...item,
-        currentStock: item.totalReceived - item.totalIssued - item.damagedQty,
-        stockStatus: (item.totalReceived - item.totalIssued - item.damagedQty) <= 0 ? 'Out of Stock'
-          : (item.totalReceived - item.totalIssued - item.damagedQty) <= item.minimumStockLevel ? 'Low Stock' : 'Normal',
-        breakdownText: Object.entries(item.issueBreakdown).map(([dept, qty]) => `${dept} (${qty})`).join(', ') || '-',
-      }));
-
-      if (q) return items.filter((r: any) => r.itemName?.toLowerCase().includes(q) || r.itemCode?.toLowerCase().includes(q));
-      return items;
-    }
-
-    case 'dharamshala_distribution': {
-      // Dharamshala-level stock with room allocation breakdown
-      const deptId = selectedDepartment ? Number(selectedDepartment) : null;
-      if (!deptId) return [];
-
-      // Get department type to determine query logic
-      const dept = await api.dbQuery('department', 'findFirst', { where: { id: deptId } });
-      const isStore = dept?.departmentType === 'Store';
-
-      const txns = await api.dbQuery('stockTransaction', 'findMany', {
-        where: { companyId, financialYearId, departmentId: deptId },
-        include: { item: { include: { category: true, unit: true } }, location: true },
-        orderBy: { transactionDate: 'asc' },
-      });
-
-      // Pre-fetch TransferChallan source department types for Store pool calculation
-      const tcRefIds = [...new Set(txns.filter((t: any) => t.referenceType === 'TransferChallan' && t.referenceId).map((t: any) => t.referenceId))];
-      const tcSourceDeptMap: Record<number, string> = {};
-      if (tcRefIds.length > 0) {
-        const tcs = await api.dbQuery('transferChallan', 'findMany', {
-          where: { id: { in: tcRefIds } },
-          include: { fromDepartment: true },
-        });
-        for (const tc of tcs) {
-          tcSourceDeptMap[tc.id] = (tc as any).fromDepartment?.departmentType || '';
-        }
-      }
-
-      const itemMap: Record<number, any> = {};
-      for (const txn of txns) {
-        const iid = txn.itemId;
-        if (!itemMap[iid]) {
-          itemMap[iid] = {
-            _itemId: iid,
-            itemCode: txn.item?.itemCode || '',
-            itemName: txn.item?.itemName || '',
-            unitName: txn.item?.unit?.name || '',
-            totalReceived: 0,
-            allocatedToRooms: 0,
-            rooms: {} as Record<string, number>,
-            poolBalance: 0,
-          };
-        }
-        const qtyIn = Number(txn.quantityIn || 0);
-        const qtyOut = Number(txn.quantityOut || 0);
-        const roomName = txn.location?.locationName || null;
-        const isRoom = txn.locationId != null;
-
-        if (isStore) {
-          // Store: PURCHASE/OPENING_STOCK = always received, TRANSFER_IN only if source is Store
-          if ((txn.transactionType === 'PURCHASE' || txn.transactionType === 'OPENING_STOCK') && qtyIn > 0) {
-            itemMap[iid].totalReceived += qtyIn;
-          }
-          if (txn.transactionType === 'TRANSFER_IN' && qtyIn > 0) {
-            const srcType = txn.referenceId ? tcSourceDeptMap[txn.referenceId] : '';
-            if (srcType === 'Store') {
-              itemMap[iid].totalReceived += qtyIn;
-            }
-            // Dharamshala source = return, don't add to pool
-          }
-          if ((txn.transactionType === 'ISSUE' || txn.transactionType === 'TRANSFER_OUT') && qtyOut > 0) {
-            itemMap[iid].allocatedToRooms += qtyOut;
-          }
-        } else {
-          // Dharamshala: ISSUE/OPENING_STOCK without room = pool, with room = allocated
-          if ((txn.transactionType === 'ISSUE' || txn.transactionType === 'OPENING_STOCK') && qtyIn > 0 && !isRoom) {
-            itemMap[iid].totalReceived += qtyIn;
-          }
-          if ((txn.transactionType === 'ISSUE' || txn.transactionType === 'OPENING_STOCK') && qtyIn > 0 && isRoom && roomName) {
-            itemMap[iid].rooms[roomName] = (itemMap[iid].rooms[roomName] || 0) + qtyIn;
-          }
-        }
-        // Both: TRANSFER_IN with room = room allocation, TRANSFER_OUT with room = room removal
-        if (txn.transactionType === 'TRANSFER_IN' && qtyIn > 0 && roomName) {
-          itemMap[iid].rooms[roomName] = (itemMap[iid].rooms[roomName] || 0) + qtyIn;
-        }
-        if (txn.transactionType === 'TRANSFER_OUT' && qtyOut > 0 && roomName) {
-          itemMap[iid].rooms[roomName] = (itemMap[iid].rooms[roomName] || 0) - qtyOut;
-        }
-      }
-
-      // Calculate allocated and pool balance
-      for (const item of Object.values(itemMap)) {
-        if (!isStore) {
-          // Dharamshala: allocated = sum of room allocations
-          item.allocatedToRooms = Object.values(item.rooms).reduce((s: number, v: any) => s + Math.max(0, Number(v)), 0);
-        }
-        item.poolBalance = item.totalReceived - item.allocatedToRooms;
-      }
-
-      const items = Object.values(itemMap).map((item: any) => ({
-        ...item,
-        roomBreakdown: Object.entries(item.rooms).filter(([_, v]: any) => v > 0).map(([name, qty]) => `${name} (${qty})`).join(', ') || '-',
-      }));
-
-      if (q) return items.filter((r: any) => r.itemName?.toLowerCase().includes(q) || r.itemCode?.toLowerCase().includes(q));
-      return items;
-    }
-
-    case 'room_facilities': {
-      // Installed assets per room with status
-      const whereClause: any = {};
+    case 'transfer_register': {
+      const where: any = { companyId, financialYearId, voucherType: 'TC', approvalStatus: 'POSTED', ...txDateFilter() };
       if (selectedDepartment) {
-        // Resolve department → location by name (Department and Location are separate tables)
-        const dept = await api.dbQuery('department', 'findFirst', {
-          where: { id: Number(selectedDepartment) },
-        });
-        if (dept) {
-          const parentLoc = await api.dbQuery('location', 'findFirst', {
-            where: { locationName: dept.name, locationType: { in: ['Dharamshala', 'Store'] } },
-          });
-          if (parentLoc) {
-            whereClause.location = { parentId: parentLoc.id };
-          }
-        }
+        where.OR = [{ fromStoreId: Number(selectedDepartment) }, { toStoreId: Number(selectedDepartment) }];
       }
-      if (selectedLocation) {
-        whereClause.locationId = Number(selectedLocation);
-      }
-
-      const installs = await api.dbQuery('assetInstallation', 'findMany', {
-        where: whereClause,
-        include: {
-          item: { include: { category: true, unit: true } },
-          location: true,
-        },
-        orderBy: { installedDate: 'desc' },
+      const data = await api.dbQuery('transactionHeader', 'findMany', {
+        where,
+        include: { details: { include: { item: true } }, fromStore: true, toStore: true },
+        orderBy: [{ transactionDate: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+        take: 2000,
       });
+      if (q) return (data as any[]).filter((r: any) => r.voucherNo?.toLowerCase().includes(q) || r.fromStore?.name?.toLowerCase().includes(q) || r.toStore?.name?.toLowerCase().includes(q));
+      return data;
+    }
 
-      const result = installs.map((inst: any) => ({
-        _id: inst.id,
-        roomNo: inst.location?.locationName || '-',
-        roomCategory: inst.location?.category || '-',
-        floor: inst.location?.floor || '-',
-        itemName: inst.item?.itemName || '-',
-        itemCode: inst.item?.itemCode || '-',
-        quantity: Number(inst.quantity),
-        unitName: inst.item?.unit?.name || '-',
-        installedDate: inst.installedDate,
-        issueChallanNo: inst.issueChallanId ? `IC-${String(inst.issueChallanId).padStart(5, '0')}` : '-',
-        status: inst.status,
-        remarks: inst.remarks || '-',
+    // ==================== INVENTORY REPORTS ====================
+    case 'stock_ledger': {
+      const where: any = { companyId, financialYearId, ...dateFilter() };
+      if (selectedItemId) where.itemId = selectedItemId;
+      if (selectedStoreId) where.storeId = selectedStoreId;
+      if (selectedTxType) where.movementType = selectedTxType;
+      const data = await api.dbQuery('ledgerEntry', 'findMany', {
+        where,
+        include: { item: { include: { category: true, unit: true } }, store: true },
+        orderBy: [{ transactionDate: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+        take: 5000,
+      });
+      let result = (data as any[]).map((t: any) => ({
+        transactionDate: t.transactionDate,
+        voucherNo: t.voucherNo || '',
+        voucherType: t.voucherType || '',
+        itemName: t.item?.itemName || '',
+        itemCode: t.item?.itemCode || '',
+        categoryName: t.item?.category?.name || '',
+        unitName: t.item?.unit?.name || '',
+        storeName: t.store?.name || '',
+        quantityIn: t.quantityIn || 0,
+        quantityOut: t.quantityOut || 0,
+        rate: t.rate || 0,
+        remarks: t.remarks || '',
       }));
-
-      if (q) return result.filter((r: any) => r.itemName?.toLowerCase().includes(q) || r.roomNo?.toLowerCase().includes(q));
+      if (q) result = result.filter((r: any) => r.item?.itemName?.toLowerCase().includes(q) || r.voucherNo?.toLowerCase().includes(q));
       return result;
-    }
-
-    case 'item_audit_ledger': {
-      // Complete item movement history with source/destination resolution
-      if (!selectedItemId) return [];
-
-      const txns = await api.dbQuery('stockTransaction', 'findMany', {
-        where: {
-          companyId, financialYearId,
-          itemId: Number(selectedItemId),
-          ...(sd || ed ? { transactionDate: { ...(sd ? { gte: sd } : {}), ...(ed ? { lte: ed } : {}) } } : {}),
-        },
-        include: { department: true, location: true },
-        orderBy: { transactionDate: 'asc' },
-      });
-
-      const TX_LABELS: Record<string, string> = {
-        PURCHASE: 'Purchase', ISSUE: 'Issue', TRANSFER_IN: 'Transfer In', TRANSFER_OUT: 'Transfer Out',
-        REVERSAL: 'Reversal', ADJUSTMENT_IN: 'Adjustment In', ADJUSTMENT_OUT: 'Adjustment Out',
-        DAMAGE: 'Damage', VENDOR_RETURN: 'Vendor Return', OPENING_STOCK: 'Opening Stock',
-        RETURN_IN: 'Return In', RETURN_OUT: 'Return Out',
-      };
-
-      let runningBalance = 0;
-      const result = txns.map((txn: any) => {
-        const qtyIn = Number(txn.quantityIn || 0);
-        const qtyOut = Number(txn.quantityOut || 0);
-        runningBalance += qtyIn - qtyOut;
-
-        // Resolve source/destination from transaction type
-        let source = '-';
-        let destination = '-';
-        if (txn.transactionType === 'PURCHASE' || txn.transactionType === 'OPENING_STOCK') {
-          source = txn.remarks || 'External';
-          destination = txn.department?.name || 'Store';
-        } else if (txn.transactionType === 'ISSUE') {
-          if (qtyOut > 0) {
-            source = txn.department?.name || 'Store';
-            destination = txn.remarks || '-';
-          } else {
-            source = txn.remarks || '-';
-            destination = txn.department?.name || 'Dharamshala';
-          }
-        } else if (txn.transactionType === 'TRANSFER_OUT') {
-          source = `${txn.department?.name || ''}${txn.location ? '/' + txn.location.locationName : ''}`;
-          destination = txn.remarks || '-';
-        } else if (txn.transactionType === 'TRANSFER_IN') {
-          source = txn.remarks || '-';
-          destination = `${txn.department?.name || ''}${txn.location ? '/' + txn.location.locationName : ''}`;
-        } else if (txn.transactionType === 'DAMAGE') {
-          source = txn.department?.name || '-';
-          destination = 'Scrap';
-        } else if (txn.transactionType === 'VENDOR_RETURN') {
-          source = txn.department?.name || '-';
-          destination = 'Vendor';
-        } else {
-          source = txn.department?.name || '-';
-          destination = txn.location?.locationName || '-';
-        }
-
-        return {
-          _id: txn.id,
-          date: txn.transactionDate,
-          referenceNo: txn.referenceNo || '-',
-          transactionType: TX_LABELS[txn.transactionType] || txn.transactionType,
-          source,
-          destination,
-          quantityIn: qtyIn,
-          quantityOut: qtyOut,
-          balanceQty: runningBalance,
-          createdBy: txn.createdBy || '-',
-          remarks: txn.remarks || '-',
-        };
-      });
-
-      if (q) return result.filter((r: any) => r.referenceNo?.toLowerCase().includes(q) || r.transactionType?.toLowerCase().includes(q) || r.source?.toLowerCase().includes(q) || r.destination?.toLowerCase().includes(q));
-      return result;
-    }
-
-    case 'damage_scrap_returns': {
-      // Combined damage, scrap & vendor return report
-      const [damageData, returnData] = await Promise.all([
-        api.dbQuery('damageEntry', 'findMany', {
-          where: {
-            ...(sd || ed ? { date: { ...(sd ? { gte: sd } : {}), ...(ed ? { lte: ed } : {}) } } : {}),
-          },
-          include: { item: { include: { category: true, unit: true } }, location: true },
-          orderBy: { date: 'desc' },
-        }),
-        api.dbQuery('vendorReturnChallan', 'findMany', {
-          where: {
-            status: 'Posted',
-            ...(sd || ed ? { date: { ...(sd ? { gte: sd } : {}), ...(ed ? { lte: ed } : {}) } } : {}),
-          },
-          include: { vendor: true, items: { include: { item: { include: { category: true, unit: true } } } } },
-          orderBy: { date: 'desc' },
-        }),
-      ]);
-
-      const rows: any[] = [];
-
-      for (const d of damageData) {
-        rows.push({
-          _id: `DMG-${d.id}`,
-          date: d.date,
-          entryType: 'DAMAGE',
-          referenceNo: `DMG-${d.id}`,
-          itemName: d.item?.itemName || '-',
-          itemCode: d.item?.itemCode || '-',
-          quantity: Number(d.quantity),
-          unitName: d.item?.unit?.name || '-',
-          sourceLocation: d.location?.locationName || '-',
-          reason: d.reason || '-',
-          actionTaken: 'Sent to Scrap',
-          reportedBy: d.reportedBy || '-',
-          categoryName: d.item?.category?.name || '-',
-        });
-      }
-
-      for (const r of returnData) {
-        for (const item of r.items || []) {
-          rows.push({
-            _id: `VRC-${r.challanNo}`,
-            date: r.date,
-            entryType: 'VENDOR_RETURN',
-            referenceNo: r.challanNo,
-            itemName: item.item?.itemName || '-',
-            itemCode: item.item?.itemCode || '-',
-            quantity: Number(item.quantity),
-            unitName: item.item?.unit?.name || '-',
-            sourceLocation: '-',
-            reason: r.reason || '-',
-            actionTaken: `Returned to ${r.vendor?.name || 'Vendor'}`,
-            reportedBy: r.returnedBy || '-',
-            categoryName: item.item?.category?.name || '-',
-          });
-        }
-      }
-
-      rows.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-
-      // Filter by category if selected
-      if (selectedCategoryId) {
-        const cat = await api.dbQuery('itemCategory', 'findUnique', { where: { id: Number(selectedCategoryId) } });
-        if (cat?.name) return rows.filter(r => r.categoryName === cat.name);
-      }
-
-      if (q) return rows.filter((r: any) => r.itemName?.toLowerCase().includes(q) || r.referenceNo?.toLowerCase().includes(q) || r.reason?.toLowerCase().includes(q));
-      return rows;
     }
 
     case 'stock_summary': {
-      // Aggregate stock by item + department from StockTransaction (single source of truth)
-      const whereClause: any = { companyId, financialYearId };
-      if (sd || ed) {
-        whereClause.transactionDate = {};
-        if (sd) whereClause.transactionDate.gte = sd;
-        if (ed) whereClause.transactionDate.lte = ed;
-      }
-      if (selectedItemId) whereClause.itemId = selectedItemId;
-      if (selectedCategoryId) whereClause.item = { categoryId: Number(selectedCategoryId) };
-      if (selectedDepartment) whereClause.departmentId = Number(selectedDepartment);
+      const where: any = { companyId, financialYearId };
+      if (selectedItemId) where.itemId = selectedItemId;
+      if (selectedCategoryId) where.item = { categoryId: Number(selectedCategoryId) };
+      if (selectedStoreId) where.storeId = selectedStoreId;
 
-      const allTx = await api.dbQuery('stockTransaction', 'findMany', {
-        where: whereClause,
-        include: { item: { include: { category: true, unit: true } }, department: true, location: true },
-        orderBy: { transactionDate: 'asc' },
-        take: 10000,
+      const grouped = await api.dbQuery('ledgerEntry', 'groupBy', {
+        by: ['itemId', 'storeId'],
+        where,
+        _sum: { quantityIn: true, quantityOut: true },
+        _count: true,
       });
 
-      const itemMap = new Map<string, any>();
-      for (const tx of allTx as any[]) {
-        const key = `${tx.itemId}-${tx.departmentId}`;
-        if (!itemMap.has(key)) {
-          itemMap.set(key, {
-            _itemId: tx.itemId,
-            itemCode: tx.item?.itemCode || '',
-            itemName: tx.item?.itemName || '',
-            category: tx.item?.category?.name || '',
-            unit: tx.item?.unit?.name || '',
-            departmentName: tx.department?.name || '',
-            departmentType: tx.department?.departmentType || '',
-            totalReceived: 0,
-            totalIssued: 0,
-            returned: 0,
-            currentStock: 0,
-            lastDate: tx.transactionDate,
-            lastRate: tx.rate,
+      const results: any[] = [];
+      for (const g of grouped as any[]) {
+        const item = await api.dbQuery('item', 'findUnique', { where: { id: g.itemId }, include: { category: true, unit: true } });
+        const store = await api.dbQuery('store', 'findUnique', { where: { id: g.storeId } });
+        results.push({
+          _itemId: g.itemId,
+          itemCode: item?.itemCode || '',
+          itemName: item?.itemName || '',
+          category: item?.category?.name || '',
+          unit: item?.unit?.name || '',
+          storeName: store?.name || '',
+          totalReceived: Number(g._sum.quantityIn || 0),
+          totalIssued: Number(g._sum.quantityOut || 0),
+          currentStock: Number(g._sum.quantityIn || 0) - Number(g._sum.quantityOut || 0),
+        });
+      }
+      if (q) return results.filter((r: any) => r.itemName?.toLowerCase().includes(q) || r.itemCode?.toLowerCase().includes(q));
+      return results;
+    }
+
+    case 'current_stock_custom': {
+      const where: any = { companyId, financialYearId };
+      if (selectedCategoryId) where.item = { categoryId: Number(selectedCategoryId) };
+      if (selectedStoreId) where.storeId = selectedStoreId;
+
+      const grouped = await api.dbQuery('ledgerEntry', 'groupBy', {
+        by: ['itemId', 'storeId'],
+        where,
+        _sum: { quantityIn: true, quantityOut: true },
+      });
+
+      let sNo = 1;
+      const result: any[] = [];
+      for (const g of grouped as any[]) {
+        const stockQty = Number(g._sum.quantityIn || 0) - Number(g._sum.quantityOut || 0);
+        if (stockQty === 0) continue;
+        const item = await api.dbQuery('item', 'findUnique', { where: { id: g.itemId }, include: { category: true, unit: true } });
+        const store = await api.dbQuery('store', 'findUnique', { where: { id: g.storeId } });
+        result.push({
+          _itemId: g.itemId,
+          sNo: sNo++,
+          itemCode: item?.itemCode || '',
+          itemName: item?.itemName || '',
+          categoryName: item?.category?.name || '',
+          storeName: store?.name || '',
+          unitName: item?.unit?.name || '',
+          totalIn: Number(g._sum.quantityIn || 0),
+          totalOut: Number(g._sum.quantityOut || 0),
+          stockQty,
+          minimumStockLevel: Number(item?.minimumStockLevel || 0),
+          stockStatus: stockQty <= 0 ? 'Out of Stock' : stockQty <= Number(item?.minimumStockLevel || 0) ? 'Low Stock' : 'Normal',
+        });
+      }
+      if (q) return result.filter((r: any) => r.itemName?.toLowerCase().includes(q) || r.itemCode?.toLowerCase().includes(q));
+      return result;
+    }
+
+    case 'stock_distribution': {
+      const where: any = { companyId, financialYearId };
+      if (selectedItemId) where.itemId = selectedItemId;
+      if (selectedCategoryId) where.item = { categoryId: selectedCategoryId };
+      if (selectedStoreId) where.storeId = selectedStoreId;
+
+      const grouped = await api.dbQuery('ledgerEntry', 'groupBy', {
+        by: ['itemId', 'storeId'],
+        where,
+        _sum: { quantityIn: true, quantityOut: true },
+      });
+
+      const result: any[] = [];
+      for (const g of grouped as any[]) {
+        const stockQty = Number(g._sum.quantityIn || 0) - Number(g._sum.quantityOut || 0);
+        if (stockQty === 0) continue;
+        const item = await api.dbQuery('item', 'findUnique', { where: { id: g.itemId }, include: { category: true, unit: true } });
+        const store = await api.dbQuery('store', 'findUnique', { where: { id: g.storeId } });
+        result.push({
+          itemCode: item?.itemCode || '',
+          itemName: item?.itemName || '',
+          categoryName: item?.category?.name || '',
+          unitName: item?.unit?.name || '',
+          storeName: store?.name || '',
+          totalReceived: Number(g._sum.quantityIn || 0),
+          totalIssued: Number(g._sum.quantityOut || 0),
+          currentStock: stockQty,
+          minimumStockLevel: Number(item?.minimumStockLevel || 0),
+        });
+      }
+      if (lowStockOnly) return result.filter((r: any) => r.currentStock < r.minimumStockLevel);
+      if (q) return result.filter((r: any) => r.itemName?.toLowerCase().includes(q) || r.itemCode?.toLowerCase().includes(q));
+      return result;
+    }
+
+    case 'low_stock': {
+      const where: any = { companyId, financialYearId };
+      if (selectedItemId) where.itemId = selectedItemId;
+      if (selectedCategoryId) where.item = { categoryId: selectedCategoryId };
+      if (selectedStoreId) where.storeId = selectedStoreId;
+
+      const grouped = await api.dbQuery('ledgerEntry', 'groupBy', {
+        by: ['itemId', 'storeId'],
+        where,
+        _sum: { quantityIn: true, quantityOut: true },
+      });
+
+      const result: any[] = [];
+      for (const g of grouped as any[]) {
+        const stockQty = Number(g._sum.quantityIn || 0) - Number(g._sum.quantityOut || 0);
+        const item = await api.dbQuery('item', 'findUnique', { where: { id: g.itemId }, include: { category: true, unit: true } });
+        const store = await api.dbQuery('store', 'findUnique', { where: { id: g.storeId } });
+        const minLevel = Number(item?.minimumStockLevel || 0);
+        if (minLevel > 0 && stockQty < minLevel) {
+          result.push({
+            _itemId: g.itemId,
+            itemCode: item?.itemCode || '',
+            itemName: item?.itemName || '',
+            categoryName: item?.category?.name || '',
+            unitName: item?.unit?.name || '',
+            storeName: store?.name || '',
+            currentStock: stockQty,
+            minimumLevel: minLevel,
+            deficit: minLevel - stockQty,
           });
         }
-        const agg = itemMap.get(key);
-        const qtyIn = Number(tx.quantityIn || 0);
-        const qtyOut = Number(tx.quantityOut || 0);
-        agg.totalReceived += qtyIn;
-        agg.totalIssued += qtyOut;
-        if (tx.transactionType === 'REVERSAL') agg.returned += qtyIn;
-        agg.currentStock = agg.totalReceived - agg.totalIssued;
-        if (tx.transactionDate > agg.lastDate) {
-          agg.lastDate = tx.transactionDate;
-          agg.lastRate = tx.rate;
-        }
       }
+      if (q) return result.filter((r: any) => r.itemName?.toLowerCase().includes(q) || r.itemCode?.toLowerCase().includes(q));
+      return result;
+    }
 
-      let rows = Array.from(itemMap.values());
-      if (q) rows = rows.filter((r: any) => r.itemName?.toLowerCase().includes(q) || r.itemCode?.toLowerCase().includes(q));
-      return rows;
+    case 'dead_stock': {
+      const where: any = { companyId, financialYearId };
+      if (selectedItemId) where.itemId = selectedItemId;
+      if (selectedCategoryId) where.item = { categoryId: selectedCategoryId };
+      if (selectedStoreId) where.storeId = selectedStoreId;
+
+      const grouped = await api.dbQuery('ledgerEntry', 'groupBy', {
+        by: ['itemId', 'storeId'],
+        where,
+        _sum: { quantityIn: true, quantityOut: true },
+      });
+
+      const result: any[] = [];
+      for (const g of grouped as any[]) {
+        const stockQty = Number(g._sum.quantityIn || 0) - Number(g._sum.quantityOut || 0);
+        if (stockQty <= 0) continue;
+        const item = await api.dbQuery('item', 'findUnique', { where: { id: g.itemId }, include: { category: true, unit: true } });
+        const store = await api.dbQuery('store', 'findUnique', { where: { id: g.storeId } });
+        result.push({
+          _itemId: g.itemId,
+          itemCode: item?.itemCode || '',
+          itemName: item?.itemName || '',
+          categoryName: item?.category?.name || '',
+          unitName: item?.unit?.name || '',
+          storeName: store?.name || '',
+          currentStock: stockQty,
+        });
+      }
+      if (q) return result.filter((r: any) => r.itemName?.toLowerCase().includes(q) || r.itemCode?.toLowerCase().includes(q));
+      return result;
+    }
+
+    case 'item_history': {
+      const where: any = { companyId, financialYearId, ...dateFilter() };
+      if (selectedItemId) where.itemId = selectedItemId;
+      if (selectedStoreId) where.storeId = selectedStoreId;
+      const data = await api.dbQuery('ledgerEntry', 'findMany', {
+        where,
+        include: { item: true, store: true },
+        orderBy: [{ transactionDate: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+      });
+
+      const TX_LABELS: Record<string, string> = {
+        PURCHASE_RECEIPT: 'Receipt', ISSUE_OUT: 'Issue Out', ISSUE_IN: 'Issue In',
+        TRANSFER_OUT: 'Transfer Out', TRANSFER_IN: 'Transfer In',
+        DAMAGE_OUT: 'Damage Out', DAMAGE_IN: 'Damage In',
+        VENDOR_RETURN: 'Vendor Return', ADJUSTMENT_PLUS: 'Adjustment +', ADJUSTMENT_MINUS: 'Adjustment -',
+        INSTALL_OUT: 'Install Out', INSTALL_IN: 'Install In',
+        SHIFT_OUT: 'Shift Out', SHIFT_IN: 'Shift In',
+        REVERSAL: 'Reversal', OPENING_BALANCE: 'Opening', CARRY_FORWARD: 'Carry Forward',
+        SCRAP_OUT: 'Scrap', REPAIR_OUT: 'Repair Out', REPAIR_IN: 'Repair In',
+        RETURN_OUT: 'Return Out', RETURN_IN: 'Return In', REPLACEMENT_OUT: 'Replace Out', REPLACEMENT_IN: 'Replace In',
+        CONSUMPTION_OUT: 'Consumption', CONSUMPTION_REVERSAL: 'Consumption Reversal',
+        UNINSTALL_OUT: 'Uninstall',
+      };
+
+      let runningBalance = 0;
+      const result = (data as any[]).map((t: any) => {
+        const qtyIn = Number(t.quantityIn || 0);
+        const qtyOut = Number(t.quantityOut || 0);
+        runningBalance += qtyIn - qtyOut;
+        return {
+          _id: t.id,
+          date: t.transactionDate,
+          referenceNo: t.voucherNo || '-',
+          transactionType: TX_LABELS[t.movementType] || t.movementType,
+          item: t.item?.itemName || '-',
+          storeName: t.store?.name || '-',
+          quantityIn: qtyIn,
+          quantityOut: qtyOut,
+          balanceQty: runningBalance,
+          rate: Number(t.rate || 0),
+          remarks: t.condition || '-',
+        };
+      });
+
+      if (q) return result.filter((r: any) => r.item?.toLowerCase().includes(q) || r.storeName?.toLowerCase().includes(q) || r.referenceNo?.toLowerCase().includes(q));
+      return result.reverse();
+    }
+
+    case 'movement_register': {
+      const where: any = { companyId, financialYearId, ...dateFilter() };
+      if (selectedItemId) where.itemId = selectedItemId;
+      if (selectedStoreId) where.storeId = selectedStoreId;
+      if (selectedTxType) where.movementType = selectedTxType;
+      const data = await api.dbQuery('ledgerEntry', 'findMany', {
+        where,
+        include: { item: true, store: true },
+        orderBy: [{ transactionDate: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+      });
+      if (q) return (data as any[]).filter((t: any) => t.item?.itemName?.toLowerCase().includes(q) || t.store?.name?.toLowerCase().includes(q));
+      return data;
+    }
+
+    case 'item_audit_ledger': {
+      if (!selectedItemId) return [];
+      const where: any = { companyId, financialYearId, itemId: Number(selectedItemId), ...dateFilter() };
+      const data = await api.dbQuery('ledgerEntry', 'findMany', {
+        where,
+        include: { store: true },
+        orderBy: [{ transactionDate: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+      });
+
+      const TX_LABELS: Record<string, string> = {
+        PURCHASE_RECEIPT: 'Receipt', ISSUE_OUT: 'Issue Out', ISSUE_IN: 'Issue In',
+        TRANSFER_OUT: 'Transfer Out', TRANSFER_IN: 'Transfer In',
+        DAMAGE_OUT: 'Damage Out', DAMAGE_IN: 'Damage In',
+        VENDOR_RETURN: 'Vendor Return', ADJUSTMENT_PLUS: 'Adjustment +', ADJUSTMENT_MINUS: 'Adjustment -',
+        REVERSAL: 'Reversal', OPENING_BALANCE: 'Opening',
+        CONSUMPTION_OUT: 'Consumption', CONSUMPTION_REVERSAL: 'Consumption Reversal',
+        SCRAP_OUT: 'Scrap', REPAIR_OUT: 'Repair Out', REPAIR_IN: 'Repair In',
+        RETURN_OUT: 'Return Out', RETURN_IN: 'Return In', REPLACEMENT_OUT: 'Replace Out', REPLACEMENT_IN: 'Replace In',
+        INSTALL_OUT: 'Install Out', INSTALL_IN: 'Install In',
+        SHIFT_OUT: 'Shift Out', SHIFT_IN: 'Shift In',
+        UNINSTALL_OUT: 'Uninstall', CARRY_FORWARD: 'Carry Forward',
+      };
+
+      let runningBalance = 0;
+      const result = (data as any[]).map((t: any) => {
+        const qtyIn = Number(t.quantityIn || 0);
+        const qtyOut = Number(t.quantityOut || 0);
+        runningBalance += qtyIn - qtyOut;
+        return {
+          _id: t.id,
+          date: t.transactionDate,
+          referenceNo: t.voucherNo || '-',
+          transactionType: TX_LABELS[t.movementType] || t.movementType,
+          storeName: t.store?.name || '-',
+          quantityIn: qtyIn,
+          quantityOut: qtyOut,
+          balanceQty: runningBalance,
+          createdBy: t.createdBy || '-',
+          rate: Number(t.rate || 0),
+        };
+      });
+
+      if (q) return result.filter((r: any) => r.referenceNo?.toLowerCase().includes(q) || r.transactionType?.toLowerCase().includes(q) || r.storeName?.toLowerCase().includes(q));
+      return result;
     }
 
     case 'item_lifecycle': {
       if (!selectedItemId) return [];
-      const txs = await api.dbQuery('stockTransaction', 'findMany', {
+      const data = await api.dbQuery('ledgerEntry', 'findMany', {
         where: { companyId, financialYearId, itemId: Number(selectedItemId) },
-        include: { item: { include: { category: true, unit: true } }, department: true, location: true },
-        orderBy: { transactionDate: 'asc' },
+        include: { item: { include: { category: true, unit: true } }, store: true },
+        orderBy: [{ transactionDate: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
       });
       let sNo = 1;
-      return (txs as any[]).map((tx: any) => ({
+      return (data as any[]).map((t: any) => ({
         sNo: sNo++,
-        date: tx.transactionDate,
-        transactionType: tx.transactionType,
-        itemCode: tx.item?.itemCode || '',
-        itemName: tx.item?.itemName || '',
-        departmentName: tx.department?.name || '',
-        departmentType: tx.department?.departmentType || '',
-        locationName: tx.location?.locationName || 'Dept Level',
-        parentLocation: tx.location?.parentId ? '' : '',
-        quantityIn: Number(tx.quantityIn || 0),
-        quantityOut: Number(tx.quantityOut || 0),
-        rate: Number(tx.rate || 0),
-        balanceQty: Number(tx.balanceQty || 0),
-        condition: tx.condition || '',
-        referenceNo: tx.referenceNo || '',
-        referenceType: tx.referenceType || '',
-        remarks: tx.remarks || '',
+        date: t.transactionDate,
+        transactionType: t.movementType,
+        itemCode: t.item?.itemCode || '',
+        itemName: t.item?.itemName || '',
+        storeName: t.store?.name || '',
+        quantityIn: Number(t.quantityIn || 0),
+        quantityOut: Number(t.quantityOut || 0),
+        rate: Number(t.rate || 0),
+        balanceQty: Number(t.balanceQty || 0),
+        condition: t.condition || '',
+        voucherNo: t.voucherNo || '',
+        voucherType: t.voucherType || '',
       }));
     }
 
+    // ==================== DAMAGE & ADJUSTMENT REPORTS ====================
+    case 'damage_report': {
+      const where: any = { companyId, financialYearId, voucherType: 'DM', ...txDateFilter() };
+      if (selectedItemId) where.details = { some: { itemId: Number(selectedItemId) } };
+      if (selectedStoreId) where.fromStoreId = selectedStoreId;
+      const data = await api.dbQuery('transactionHeader', 'findMany', {
+        where,
+        include: { details: { include: { item: true } }, fromStore: true },
+        orderBy: [{ transactionDate: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+        take: 2000,
+      });
+      const result: any[] = [];
+      for (const r of data as any[]) {
+        for (const d of r.details || []) {
+          result.push({
+            _id: r.id,
+            date: r.transactionDate,
+            challanNo: r.voucherNo,
+            itemName: d.item?.itemName || '-',
+            itemCode: d.item?.itemCode || '-',
+            quantity: Number(d.quantity),
+            condition: d.condition || '-',
+            storeName: r.fromStore?.name || '-',
+            remarks: r.remarks || '-',
+            status: r.approvalStatus,
+          });
+        }
+      }
+      if (q) return result.filter((r: any) => r.itemName?.toLowerCase().includes(q) || r.challanNo?.toLowerCase().includes(q));
+      return result;
+    }
+
+    case 'stock_adjustments': {
+      const where: any = { companyId, financialYearId, voucherType: 'AD', ...txDateFilter() };
+      const data = await api.dbQuery('transactionHeader', 'findMany', {
+        where,
+        include: { details: { include: { item: true } }, fromStore: true },
+        orderBy: [{ transactionDate: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+        take: 2000,
+      });
+      const result: any[] = [];
+      for (const r of data as any[]) {
+        for (const d of r.details || []) {
+          result.push({
+            _id: r.id,
+            date: r.transactionDate,
+            challanNo: r.voucherNo,
+            itemName: d.item?.itemName || '-',
+            itemCode: d.item?.itemCode || '-',
+            quantity: Number(d.quantity),
+            rate: Number(d.rate || 0),
+            storeName: r.fromStore?.name || '-',
+            remarks: r.remarks || '-',
+          });
+        }
+      }
+      if (q) return result.filter((r: any) => r.itemName?.toLowerCase().includes(q) || r.challanNo?.toLowerCase().includes(q));
+      return result;
+    }
+
+    case 'damage_scrap_returns': {
+      const [damageData, returnData] = await Promise.all([
+        api.dbQuery('transactionHeader', 'findMany', {
+          where: { companyId, financialYearId, voucherType: 'DM', ...txDateFilter() },
+          include: { details: { include: { item: { include: { category: true, unit: true } } } }, fromStore: true },
+          orderBy: [{ transactionDate: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+        }),
+        api.dbQuery('transactionHeader', 'findMany', {
+          where: { companyId, financialYearId, voucherType: 'VR', ...txDateFilter() },
+          include: { details: { include: { item: { include: { category: true, unit: true } } } }, vendor: true },
+          orderBy: [{ transactionDate: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+        }),
+      ]);
+
+      const rows: any[] = [];
+      for (const r of damageData as any[]) {
+        for (const d of r.details || []) {
+          rows.push({
+            _id: `DM-${r.id}`, date: r.transactionDate, entryType: 'DAMAGE',
+            referenceNo: r.voucherNo, itemName: d.item?.itemName || '-',
+            itemCode: d.item?.itemCode || '-', quantity: Number(d.quantity),
+            unitName: d.item?.unit?.name || '-', storeName: r.fromStore?.name || '-',
+            reason: r.remarks || '-', actionTaken: 'Damaged',
+            categoryName: d.item?.category?.name || '-',
+          });
+        }
+      }
+      for (const r of returnData as any[]) {
+        for (const d of r.details || []) {
+          rows.push({
+            _id: `VR-${r.id}`, date: r.transactionDate, entryType: 'VENDOR_RETURN',
+            referenceNo: r.voucherNo, itemName: d.item?.itemName || '-',
+            itemCode: d.item?.itemCode || '-', quantity: Number(d.quantity),
+            unitName: d.item?.unit?.name || '-', storeName: r.vendor?.vendorName || '-',
+            reason: r.remarks || '-', actionTaken: `Returned to ${r.vendor?.vendorName || 'Vendor'}`,
+            categoryName: d.item?.category?.name || '-',
+          });
+        }
+      }
+      rows.sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      if (q) return rows.filter((r: any) => r.itemName?.toLowerCase().includes(q) || r.referenceNo?.toLowerCase().includes(q));
+      return rows;
+    }
+
+    // ==================== ENTERPRISE REPORTS ====================
+    case 'central_store_summary': {
+      const storeId = selectedStoreId || (selectedDepartment ? Number(selectedDepartment) : null);
+      if (!storeId) return [];
+
+      const grouped = await api.dbQuery('ledgerEntry', 'groupBy', {
+        by: ['itemId'],
+        where: { companyId, financialYearId, storeId },
+        _sum: { quantityIn: true, quantityOut: true },
+      });
+
+      const items: any[] = [];
+      for (const g of grouped as any[]) {
+        const stockQty = Number(g._sum.quantityIn || 0) - Number(g._sum.quantityOut || 0);
+        if (stockQty <= 0) continue;
+        const item = await api.dbQuery('item', 'findUnique', { where: { id: g.itemId }, include: { category: true, unit: true } });
+        items.push({
+          _itemId: g.itemId,
+          itemCode: item?.itemCode || '',
+          itemName: item?.itemName || '',
+          categoryName: item?.category?.name || '',
+          unitName: item?.unit?.name || '',
+          minimumStockLevel: Number(item?.minimumStockLevel || 0),
+          totalReceived: Number(g._sum.quantityIn || 0),
+          totalIssued: Number(g._sum.quantityOut || 0),
+          currentStock: stockQty,
+          stockStatus: stockQty <= Number(item?.minimumStockLevel || 0) ? 'Low Stock' : 'Normal',
+        });
+      }
+      if (q) return items.filter((r: any) => r.itemName?.toLowerCase().includes(q) || r.itemCode?.toLowerCase().includes(q));
+      return items;
+    }
+
+    case 'dharamshala_items': {
+      const where: any = { companyId, financialYearId };
+      const data = await api.dbQuery('ledgerEntry', 'findMany', {
+        where,
+        include: { item: { include: { category: true, unit: true } }, store: true },
+        orderBy: [{ transactionDate: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+      });
+      const summary: Record<number, any> = {};
+      (data as any[]).forEach((t: any) => {
+        const key = t.itemId;
+        if (!summary[key]) summary[key] = { item: t.item, store: t.store, totalIn: 0, totalOut: 0 };
+        summary[key].totalIn += Number(t.quantityIn || 0);
+        summary[key].totalOut += Number(t.quantityOut || 0);
+      });
+      let result = Object.values(summary).map((s: any) => ({
+        ...s.item, storeName: s.store?.name || '', totalReceived: s.totalIn, totalIssued: s.totalOut, currentStock: s.totalIn - s.totalOut,
+      })).filter((r: any) => r.currentStock > 0);
+      if (q) result = result.filter((r: any) => r.itemName?.toLowerCase().includes(q) || r.itemCode?.toLowerCase().includes(q));
+      return result;
+    }
+
+    case 'department_stock_status': {
+      if (!selectedDepartment) return [];
+      const where: any = { companyId, financialYearId, storeId: Number(selectedDepartment) };
+      const data = await api.dbQuery('ledgerEntry', 'findMany', {
+        where,
+        include: { item: true, store: true },
+        orderBy: [{ transactionDate: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+      });
+      const summary: Record<number, any> = {};
+      (data as any[]).forEach((t: any) => {
+        const key = t.itemId;
+        if (!summary[key]) summary[key] = { item: t.item, store: t.store, totalIn: 0, totalOut: 0 };
+        summary[key].totalIn += Number(t.quantityIn || 0);
+        summary[key].totalOut += Number(t.quantityOut || 0);
+      });
+      let sNo = 1;
+      let result = Object.values(summary).map((s: any) => ({
+        _itemId: s.item.id,
+        sNo: sNo++,
+        itemName: s.item.itemName,
+        itemCode: s.item.itemCode || '',
+        storeName: s.store?.name || '',
+        totalQty: s.totalIn,
+        balanceQty: s.totalIn - s.totalOut,
+      })).filter((r: any) => r.totalQty > 0 || r.balanceQty > 0);
+      if (q) result = result.filter((r: any) => r.itemName?.toLowerCase().includes(q));
+      return result;
+    }
+
+    // ==================== INSTALLATION TRACKING ====================
+    case 'installation_tracking': {
+      const where: any = {};
+      if (selectedStoreId) where.storeId = selectedStoreId;
+      if (selectedItemId) where.itemId = Number(selectedItemId);
+      const data = await api.dbQuery('assetInstallation', 'findMany', {
+        where,
+        include: { item: { include: { category: true, unit: true } }, room: { include: { location: true } }, store: true },
+        orderBy: { installedDate: 'desc' },
+      });
+      let sNo = 1;
+      let result = (data as any[]).map((inst: any) => ({
+        sNo: sNo++,
+        itemName: inst.item?.itemName || '-',
+        itemCode: inst.item?.itemCode || '-',
+        storeName: inst.store?.name || '-',
+        locationName: inst.room?.location?.name || '-',
+        roomName: inst.room?.name || '-',
+        quantity: Number(inst.quantity),
+        installedDate: inst.installedDate,
+        installedBy: inst.installedBy || '-',
+        uninstalledDate: inst.uninstalledDate,
+        uninstalledBy: inst.uninstalledBy || '-',
+        status: inst.status,
+        remarks: inst.remarks || '-',
+      }));
+      if (q) result = result.filter((r: any) => r.itemName?.toLowerCase().includes(q) || r.storeName?.toLowerCase().includes(q) || r.roomName?.toLowerCase().includes(q));
+      return result;
+    }
+
+    // ==================== STORE-WISE STOCK ====================
+    case 'store_wise_stock': {
+      const where: any = { companyId, financialYearId };
+      if (selectedItemId) where.itemId = selectedItemId;
+      if (selectedCategoryId) where.item = { categoryId: Number(selectedCategoryId) };
+
+      const grouped = await api.dbQuery('ledgerEntry', 'groupBy', {
+        by: ['storeId'],
+        where,
+        _sum: { quantityIn: true, quantityOut: true },
+      });
+
+      const result: any[] = [];
+      for (const g of grouped as any[]) {
+        const store = await api.dbQuery('store', 'findUnique', { where: { id: g.storeId } });
+        // Get item-wise breakdown for this store
+        const itemGrouped = await api.dbQuery('ledgerEntry', 'groupBy', {
+          by: ['itemId'],
+          where: { companyId, financialYearId, storeId: g.storeId },
+          _sum: { quantityIn: true, quantityOut: true },
+        });
+        const items: any[] = [];
+        for (const ig of itemGrouped as any[]) {
+          const stockQty = Number(ig._sum.quantityIn || 0) - Number(ig._sum.quantityOut || 0);
+          if (stockQty <= 0) continue;
+          const item = await api.dbQuery('item', 'findUnique', { where: { id: ig.itemId }, include: { unit: true } });
+          items.push({
+            itemName: item?.itemName || '',
+            itemCode: item?.itemCode || '',
+            unitName: item?.unit?.name || '',
+            quantity: stockQty,
+            totalValue: stockQty * 0,
+          });
+        }
+        result.push({
+          storeId: g.storeId,
+          storeName: store?.name || '',
+          storeType: store?.storeType || '',
+          totalItems: items.length,
+          totalQuantity: items.reduce((s: number, i: any) => s + i.quantity, 0),
+          items,
+        });
+      }
+      if (q) return result.filter((r: any) => r.storeName?.toLowerCase().includes(q));
+      return result;
+    }
+
+    // ==================== AUDIT LOG ====================
+    case 'audit_log': {
+      const where: any = { companyId };
+      if (sd || ed) { where.createdAt = {}; if (sd) where.createdAt.gte = sd; if (ed) where.createdAt.lte = ed; }
+      if (selectedAuditAction) where.action = selectedAuditAction;
+      if (selectedAuditTable) where.tableName = selectedAuditTable;
+      const data = await api.dbQuery('auditLog', 'findMany', { where, orderBy: { createdAt: 'desc' }, take: 2000 });
+      if (q) return (data as any[]).filter((r: any) => r.action?.toLowerCase().includes(q) || r.tableName?.toLowerCase().includes(q) || r.description?.toLowerCase().includes(q));
+      return data;
+    }
+
+    // ==================== VISUAL ANALYTICS ====================
     case 'visual_analytics': {
-      // Aggregated data for charts
-      const txData = await api.dbQuery('stockTransaction', 'findMany', {
+      const txData = await api.dbQuery('ledgerEntry', 'findMany', {
         where: { companyId, financialYearId },
-        include: { item: { include: { category: true } }, department: true },
-        orderBy: { transactionDate: 'asc' },
+        include: { item: { include: { category: true } }, store: true },
+        orderBy: [{ transactionDate: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
         take: 10000,
       });
 
-      // Department consumption
-      const deptConsumption: Record<string, { name: string; received: number; issued: number }> = {};
-      // Monthly trend
+      const storeConsumption: Record<number, { name: string; received: number; issued: number }> = {};
       const monthlyTrend: Record<string, { month: string; received: number; issued: number }> = {};
-      // Location distribution
-      const locationDist: Record<string, { name: string; qty: number }> = {};
+      const storeDistribution: Record<number, { name: string; qty: number }> = {};
 
       for (const tx of txData as any[]) {
-        const deptName = tx.department?.name || 'Unknown';
+        const storeName = tx.store?.name || 'Unknown';
         const qtyIn = Number(tx.quantityIn || 0);
         const qtyOut = Number(tx.quantityOut || 0);
 
-        // Dept consumption
-        if (!deptConsumption[tx.departmentId]) deptConsumption[tx.departmentId] = { name: deptName, received: 0, issued: 0 };
-        deptConsumption[tx.departmentId].received += qtyIn;
-        deptConsumption[tx.departmentId].issued += qtyOut;
+        if (!storeConsumption[tx.storeId]) storeConsumption[tx.storeId] = { name: storeName, received: 0, issued: 0 };
+        storeConsumption[tx.storeId].received += qtyIn;
+        storeConsumption[tx.storeId].issued += qtyOut;
 
-        // Monthly trend
         const d = new Date(tx.transactionDate);
-        const monthKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-        const monthLabel = d.toLocaleDateString('en-IN', { month: 'short', year: '2-digit' });
+        // Use IST timezone for month/year grouping
+        const istParts = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit' }).formatToParts(d);
+        const istYear = parseInt(istParts.find(p => p.type === 'year')?.value || '0');
+        const istMonth = parseInt(istParts.find(p => p.type === 'month')?.value || '0');
+        const monthKey = `${istYear}-${String(istMonth).padStart(2, '0')}`;
+        const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+        const monthLabel = `${monthNames[istMonth - 1]} ${String(istYear).slice(-2)}`;
         if (!monthlyTrend[monthKey]) monthlyTrend[monthKey] = { month: monthLabel, received: 0, issued: 0 };
         monthlyTrend[monthKey].received += qtyIn;
         monthlyTrend[monthKey].issued += qtyOut;
 
-        // Location distribution (current stock per dept type)
-        if (tx.department?.departmentType && qtyIn > 0) {
-          const locName = tx.department.name;
-          if (!locationDist[locName]) locationDist[locName] = { name: locName, qty: 0 };
-          locationDist[locName].qty += qtyIn - qtyOut;
-        }
+        if (!storeDistribution[tx.storeId]) storeDistribution[tx.storeId] = { name: storeName, qty: 0 };
+        storeDistribution[tx.storeId].qty += qtyIn - qtyOut;
       }
 
       return [{
-        departmentConsumption: Object.values(deptConsumption).filter((d: any) => d.received > 0 || d.issued > 0),
+        departmentConsumption: Object.values(storeConsumption).filter((d: any) => d.received > 0 || d.issued > 0),
         monthlyTrend: Object.values(monthlyTrend),
-        locationDistribution: Object.values(locationDist).filter((l: any) => l.qty > 0),
+        locationDistribution: Object.values(storeDistribution).filter((l: any) => l.qty > 0),
       }];
+    }
+
+    case 'dharamshala_distribution': {
+      const stores = await api.dbQuery('store', 'findMany', {
+        where: { companyId, storeType: 'DHARMSHALA_STORE' },
+      });
+      const result: any[] = [];
+      for (const store of stores as any[]) {
+        const grouped = await api.dbQuery('ledgerEntry', 'groupBy', {
+          by: ['itemId', 'locationId'],
+          where: { companyId, financialYearId, storeId: store.id },
+          _sum: { quantityIn: true, quantityOut: true },
+        });
+        for (const g of grouped as any[]) {
+          const totalReceived = Number(g._sum.quantityIn || 0);
+          const totalIssued = Number(g._sum.quantityOut || 0);
+          const balanceQty = totalReceived - totalIssued;
+          if (balanceQty <= 0) continue;
+          const item = await api.dbQuery('item', 'findUnique', { where: { id: g.itemId }, include: { category: true } });
+          let locationName = '';
+          if (g.locationId) {
+            const loc = await api.dbQuery('location', 'findUnique', { where: { id: g.locationId } });
+            locationName = (loc as any)?.name || '';
+          }
+          result.push({
+            storeName: store.name || '',
+            locationName: locationName || '-',
+            itemName: item?.itemName || '',
+            itemCode: item?.itemCode || '',
+            categoryName: item?.category?.name || '',
+            totalReceived,
+            totalIssued,
+            consumed: totalIssued,
+            balanceQty,
+          });
+        }
+      }
+      if (q) return result.filter((r: any) => r.storeName?.toLowerCase().includes(q) || r.itemName?.toLowerCase().includes(q) || r.itemCode?.toLowerCase().includes(q) || r.locationName?.toLowerCase().includes(q));
+      return result;
+    }
+
+    case 'room_facilities': {
+      const where: any = {};
+      if (selectedStoreId) where.storeId = selectedStoreId;
+      const data = await api.dbQuery('assetInstallation', 'findMany', {
+        where,
+        include: { item: { include: { category: true, unit: true } }, room: { include: { location: true } }, store: true },
+        orderBy: { installedDate: 'desc' },
+      });
+      const result = (data as any[]).map((inst: any) => ({
+        roomName: inst.room?.name || '-',
+        locationName: inst.room?.location?.name || '-',
+        storeName: inst.store?.name || '-',
+        itemName: inst.item?.itemName || '-',
+        itemCode: inst.item?.itemCode || '-',
+        categoryName: inst.item?.category?.name || '-',
+        quantity: Number(inst.quantity),
+        installedDate: inst.installedDate,
+        status: inst.status,
+      }));
+      if (q) return result.filter((r: any) => r.roomName?.toLowerCase().includes(q) || r.itemName?.toLowerCase().includes(q) || r.storeName?.toLowerCase().includes(q));
+      return result;
+    }
+
+    // ==================== STOCK ANALYSIS REPORTS ====================
+    case 'overall_stock': {
+      const where: any = { companyId, financialYearId };
+      if (selectedCategoryId) where.item = { categoryId: Number(selectedCategoryId) };
+      const grouped = await api.dbQuery('ledgerEntry', 'groupBy', {
+        by: ['itemId'],
+        where,
+        _sum: { quantityIn: true, quantityOut: true },
+      });
+      const result: any[] = [];
+      for (const g of grouped as any[]) {
+        const qtyIn = Number(g._sum.quantityIn || 0);
+        const qtyOut = Number(g._sum.quantityOut || 0);
+        const balance = qtyIn - qtyOut;
+        if (balance <= 0) continue;
+        const item = await api.dbQuery('item', 'findUnique', { where: { id: g.itemId }, include: { category: true, unit: true } });
+        result.push({
+          itemCode: item?.itemCode || '', itemName: item?.itemName || '',
+          categoryName: item?.category?.name || '', unitName: item?.unit?.name || '',
+          qtyIn, qtyOut, balance,
+        });
+      }
+      if (q) return result.filter((r: any) => r.itemName?.toLowerCase().includes(q) || r.itemCode?.toLowerCase().includes(q));
+      return result;
+    }
+
+    case 'dept_stock': {
+      const where: any = { companyId, financialYearId };
+      if (selectedDepartment) where.storeId = Number(selectedDepartment);
+      const grouped = await api.dbQuery('ledgerEntry', 'groupBy', {
+        by: ['itemId', 'storeId'],
+        where,
+        _sum: { quantityIn: true, quantityOut: true },
+      });
+      const result: any[] = [];
+      for (const g of grouped as any[]) {
+        const qtyIn = Number(g._sum.quantityIn || 0);
+        const qtyOut = Number(g._sum.quantityOut || 0);
+        const balance = qtyIn - qtyOut;
+        if (balance <= 0) continue;
+        const item = await api.dbQuery('item', 'findUnique', { where: { id: g.itemId }, include: { category: true, unit: true } });
+        const store = await api.dbQuery('store', 'findUnique', { where: { id: g.storeId } });
+        result.push({
+          storeName: store?.name || '', itemName: item?.itemName || '',
+          itemCode: item?.itemCode || '', categoryName: item?.category?.name || '',
+          unitName: item?.unit?.name || '', qtyIn, qtyOut, balance,
+        });
+      }
+      if (q) return result.filter((r: any) => r.storeName?.toLowerCase().includes(q) || r.itemName?.toLowerCase().includes(q));
+      return result;
+    }
+
+    case 'item_stock': {
+      const where: any = { companyId, financialYearId };
+      if (selectedItemId) where.itemId = Number(selectedItemId);
+      if (selectedCategoryId) where.item = { categoryId: Number(selectedCategoryId) };
+      const grouped = await api.dbQuery('ledgerEntry', 'groupBy', {
+        by: ['itemId', 'storeId'],
+        where,
+        _sum: { quantityIn: true, quantityOut: true },
+      });
+      const result: any[] = [];
+      for (const g of grouped as any[]) {
+        const qtyIn = Number(g._sum.quantityIn || 0);
+        const qtyOut = Number(g._sum.quantityOut || 0);
+        const balance = qtyIn - qtyOut;
+        if (balance <= 0) continue;
+        const item = await api.dbQuery('item', 'findUnique', { where: { id: g.itemId }, include: { category: true, unit: true } });
+        const store = await api.dbQuery('store', 'findUnique', { where: { id: g.storeId } });
+        result.push({
+          itemCode: item?.itemCode || '', itemName: item?.itemName || '',
+          categoryName: item?.category?.name || '', unitName: item?.unit?.name || '',
+          storeName: store?.name || '', qtyIn, qtyOut, balance,
+        });
+      }
+      if (q) return result.filter((r: any) => r.itemName?.toLowerCase().includes(q) || r.itemCode?.toLowerCase().includes(q));
+      return result;
+    }
+
+    case 'category_stock': {
+      const where: any = { companyId, financialYearId };
+      if (selectedCategoryId) where.item = { categoryId: Number(selectedCategoryId) };
+      const grouped = await api.dbQuery('ledgerEntry', 'groupBy', {
+        by: ['itemId'],
+        where,
+        _sum: { quantityIn: true, quantityOut: true },
+      });
+      const categoryMap: Record<number, { name: string; qtyIn: number; qtyOut: number; items: number }> = {};
+      for (const g of grouped as any[]) {
+        const qtyIn = Number(g._sum.quantityIn || 0);
+        const qtyOut = Number(g._sum.quantityOut || 0);
+        const balance = qtyIn - qtyOut;
+        if (balance <= 0) continue;
+        const item = await api.dbQuery('item', 'findUnique', { where: { id: g.itemId }, include: { category: true } });
+        const catId = item?.categoryId || 0;
+        const catName = item?.category?.name || 'Uncategorized';
+        if (!categoryMap[catId]) categoryMap[catId] = { name: catName, qtyIn: 0, qtyOut: 0, items: 0 };
+        categoryMap[catId].qtyIn += qtyIn;
+        categoryMap[catId].qtyOut += qtyOut;
+        categoryMap[catId].items++;
+      }
+      const result = Object.values(categoryMap).map(c => ({
+        categoryName: c.name, totalItems: c.items, qtyIn: c.qtyIn, qtyOut: c.qtyOut, balance: c.qtyIn - c.qtyOut,
+      }));
+      if (q) return result.filter((r: any) => r.categoryName?.toLowerCase().includes(q));
+      return result;
+    }
+
+    // ==================== MOVEMENT REPORTS ====================
+    case 'uninstallation_report': {
+      const where: any = { companyId, financialYearId, voucherType: 'UN', ...txDateFilter() };
+      if (selectedItemId) where.details = { some: { itemId: Number(selectedItemId) } };
+      const data = await api.dbQuery('transactionHeader', 'findMany', {
+        where, include: { details: { include: { item: true } }, fromStore: true },
+        orderBy: [{ transactionDate: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }], take: 2000,
+      });
+      const result: any[] = [];
+      for (const r of data as any[]) {
+        for (const d of r.details || []) {
+          result.push({ date: r.transactionDate, challanNo: r.voucherNo, itemName: d.item?.itemName || '-', itemCode: d.item?.itemCode || '-', quantity: Number(d.quantity), storeName: r.fromStore?.name || '-', remarks: r.remarks || '-' });
+        }
+      }
+      if (q) return result.filter((r: any) => r.itemName?.toLowerCase().includes(q) || r.challanNo?.toLowerCase().includes(q));
+      return result;
+    }
+
+    case 'repair_report': {
+      const where: any = { companyId, financialYearId, voucherType: 'RP', ...txDateFilter() };
+      if (selectedItemId) where.details = { some: { itemId: Number(selectedItemId) } };
+      const data = await api.dbQuery('transactionHeader', 'findMany', {
+        where, include: { details: { include: { item: true } }, fromStore: true },
+        orderBy: [{ transactionDate: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }], take: 2000,
+      });
+      const result: any[] = [];
+      for (const r of data as any[]) {
+        for (const d of r.details || []) {
+          result.push({ date: r.transactionDate, challanNo: r.voucherNo, itemName: d.item?.itemName || '-', itemCode: d.item?.itemCode || '-', quantity: Number(d.quantity), storeName: r.fromStore?.name || '-', remarks: r.remarks || '-' });
+        }
+      }
+      if (q) return result.filter((r: any) => r.itemName?.toLowerCase().includes(q) || r.challanNo?.toLowerCase().includes(q));
+      return result;
+    }
+
+    case 'replacement_report': {
+      const where: any = { companyId, financialYearId, voucherType: 'RM', ...txDateFilter() };
+      if (selectedItemId) where.details = { some: { itemId: Number(selectedItemId) } };
+      const data = await api.dbQuery('transactionHeader', 'findMany', {
+        where, include: { details: { include: { item: true } }, fromStore: true },
+        orderBy: [{ transactionDate: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }], take: 2000,
+      });
+      const result: any[] = [];
+      for (const r of data as any[]) {
+        for (const d of r.details || []) {
+          result.push({ date: r.transactionDate, challanNo: r.voucherNo, itemName: d.item?.itemName || '-', itemCode: d.item?.itemCode || '-', quantity: Number(d.quantity), storeName: r.fromStore?.name || '-', remarks: r.remarks || '-' });
+        }
+      }
+      if (q) return result.filter((r: any) => r.itemName?.toLowerCase().includes(q) || r.challanNo?.toLowerCase().includes(q));
+      return result;
+    }
+
+    case 'return_report': {
+      const where: any = { companyId, financialYearId, voucherType: 'RT', ...txDateFilter() };
+      if (selectedItemId) where.details = { some: { itemId: Number(selectedItemId) } };
+      const data = await api.dbQuery('transactionHeader', 'findMany', {
+        where, include: { details: { include: { item: true } }, fromStore: true, vendor: true },
+        orderBy: [{ transactionDate: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }], take: 2000,
+      });
+      const result: any[] = [];
+      for (const r of data as any[]) {
+        for (const d of r.details || []) {
+          result.push({ date: r.transactionDate, challanNo: r.voucherNo, itemName: d.item?.itemName || '-', itemCode: d.item?.itemCode || '-', quantity: Number(d.quantity), vendor: r.vendor?.vendorName || '-', storeName: r.fromStore?.name || '-', remarks: r.remarks || '-' });
+        }
+      }
+      if (q) return result.filter((r: any) => r.itemName?.toLowerCase().includes(q) || r.challanNo?.toLowerCase().includes(q));
+      return result;
+    }
+
+    // ==================== LEDGER REPORTS ====================
+    case 'item_ledger': {
+      if (!selectedItemId) return [];
+      const where: any = { companyId, financialYearId, itemId: Number(selectedItemId), ...dateFilter() };
+      const data = await api.dbQuery('ledgerEntry', 'findMany', {
+        where, include: { item: true, store: true }, orderBy: [{ transactionDate: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+      });
+      if (q) return (data as any[]).filter((t: any) => t.store?.name?.toLowerCase().includes(q) || t.voucherNo?.toLowerCase().includes(q));
+      return data;
+    }
+
+    case 'store_ledger': {
+      if (!selectedStoreId) return [];
+      const where: any = { companyId, financialYearId, storeId: Number(selectedStoreId), ...dateFilter() };
+      const data = await api.dbQuery('ledgerEntry', 'findMany', {
+        where, include: { item: true, store: true }, orderBy: [{ transactionDate: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+      });
+      if (q) return (data as any[]).filter((t: any) => t.item?.itemName?.toLowerCase().includes(q) || t.voucherNo?.toLowerCase().includes(q));
+      return data;
+    }
+
+    case 'dept_ledger': {
+      if (!selectedDepartment) return [];
+      const where: any = { companyId, financialYearId, storeId: Number(selectedDepartment), ...dateFilter() };
+      const data = await api.dbQuery('ledgerEntry', 'findMany', {
+        where, include: { item: true, store: true }, orderBy: [{ transactionDate: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+      });
+      if (q) return (data as any[]).filter((t: any) => t.item?.itemName?.toLowerCase().includes(q) || t.voucherNo?.toLowerCase().includes(q));
+      return data;
+    }
+
+    // ==================== ASSET REPORTS ====================
+    case 'asset_register': {
+      const where: any = {};
+      if (selectedStoreId) where.currentStoreId = selectedStoreId;
+      const data = await api.dbQuery('asset', 'findMany', {
+        where, include: { item: true, currentStore: true, currentRoom: true, currentDepartment: true },
+        orderBy: { assetCode: 'asc' },
+      });
+      if (q) return (data as any[]).filter((a: any) => a.assetCode?.toLowerCase().includes(q) || a.item?.itemName?.toLowerCase().includes(q));
+      return data;
+    }
+
+    case 'installed_assets': {
+      const where: any = { status: 'ACTIVE' };
+      if (selectedStoreId) where.storeId = selectedStoreId;
+      const data = await api.dbQuery('assetInstallation', 'findMany', {
+        where, include: { item: true, room: { include: { location: true } }, store: true },
+        orderBy: { installedDate: 'desc' },
+      });
+      if (q) return (data as any[]).filter((i: any) => i.item?.itemName?.toLowerCase().includes(q) || i.store?.name?.toLowerCase().includes(q));
+      return data;
+    }
+
+    case 'asset_health': {
+      const data = await api.dbQuery('asset', 'findMany', {
+        include: { item: true },
+        orderBy: { assetCode: 'asc' },
+      });
+      if (q) return (data as any[]).filter((a: any) => a.assetCode?.toLowerCase().includes(q) || a.item?.itemName?.toLowerCase().includes(q));
+      return data;
+    }
+
+    case 'warranty_expiry': {
+      const where: any = { warrantyEnd: { not: null } };
+      const data = await api.dbQuery('asset', 'findMany', {
+        where, include: { item: true },
+        orderBy: { warrantyEnd: 'asc' },
+      });
+      if (q) return (data as any[]).filter((a: any) => a.assetCode?.toLowerCase().includes(q) || a.item?.itemName?.toLowerCase().includes(q));
+      return data;
+    }
+
+    case 'amc_expiry': {
+      const data = await api.dbQuery('aMC', 'findMany', {
+        where: { status: 'ACTIVE' },
+        include: { asset: { include: { item: true } } },
+        orderBy: { endDate: 'asc' },
+      });
+      if (q) return (data as any[]).filter((a: any) => a.asset?.assetCode?.toLowerCase().includes(q) || a.asset?.item?.itemName?.toLowerCase().includes(q));
+      return data;
+    }
+
+    // ==================== PURCHASE ANALYSIS REPORTS ====================
+    case 'purchase_register': {
+      const where: any = { companyId, financialYearId, ...txDateFilter() };
+      if (selectedVendor) where.vendorId = Number(selectedVendor);
+      const data = await api.dbQuery('purchaseOrder', 'findMany', {
+        where, include: { vendor: true, details: { include: { item: true } }, goodsReceipts: true },
+        orderBy: { createdAt: 'desc' }, take: 2000,
+      });
+      if (q) return (data as any[]).filter((p: any) => p.poNumber?.toLowerCase().includes(q) || p.vendor?.name?.toLowerCase().includes(q));
+      return data;
+    }
+
+    case 'grn_register': {
+      const where: any = { companyId, financialYearId, ...txDateFilter() };
+      if (selectedVendor) where.purchaseOrder = { vendorId: Number(selectedVendor) };
+      const data = await api.dbQuery('goodsReceipt', 'findMany', {
+        where, include: { purchaseOrder: { include: { vendor: true } }, details: { include: { item: true } } },
+        orderBy: { createdAt: 'desc' }, take: 2000,
+      });
+      if (q) return (data as any[]).filter((g: any) => g.grnNumber?.toLowerCase().includes(q) || g.purchaseOrder?.vendor?.name?.toLowerCase().includes(q));
+      return data;
+    }
+
+    case 'vendor_performance': {
+      const vendors = await api.dbQuery('vendor', 'findMany', { where: { companyId }, orderBy: { vendorName: 'asc' } });
+      const result: any[] = [];
+      for (const v of vendors as any[]) {
+        const poCount = await api.dbQuery('purchaseOrder', 'count', { where: { vendorId: v.id } });
+        const grnCount = await api.dbQuery('goodsReceipt', 'count', { where: { purchaseOrder: { vendorId: v.id } } });
+        result.push({ vendorCode: v.vendorCode || '', vendorName: v.vendorName, totalPO: poCount, completedGRN: grnCount, avgRating: v.vendorRating || 0 });
+      }
+      if (q) return result.filter((r: any) => r.vendorName?.toLowerCase().includes(q) || r.vendorCode?.toLowerCase().includes(q));
+      return result;
+    }
+
+    // ==================== MAINTENANCE REPORTS ====================
+    case 'service_register': {
+      const where: any = {};
+      if (selectedItemId) where.assetId = Number(selectedItemId);
+      const data = await api.dbQuery('maintenanceHistory', 'findMany', {
+        where, include: { asset: { include: { item: true } } },
+        orderBy: { serviceDate: 'desc' }, take: 2000,
+      });
+      if (q) return (data as any[]).filter((m: any) => m.asset?.assetCode?.toLowerCase().includes(q) || m.asset?.item?.itemName?.toLowerCase().includes(q));
+      return data;
+    }
+
+    case 'wo_register': {
+      const data = await api.dbQuery('workOrder', 'findMany', {
+        include: { asset: { include: { item: true } }, spareParts: true, costs: true },
+        orderBy: { createdAt: 'desc' }, take: 2000,
+      });
+      if (q) return (data as any[]).filter((w: any) => w.orderNumber?.toLowerCase().includes(q) || w.asset?.assetCode?.toLowerCase().includes(q));
+      return data;
+    }
+
+    case 'downtime_report': {
+      const where: any = {};
+      if (selectedItemId) where.assetId = Number(selectedItemId);
+      const data = await api.dbQuery('breakdownHistory', 'findMany', {
+        where, include: { asset: { include: { item: true } } },
+        orderBy: { breakdownDate: 'desc' }, take: 2000,
+      });
+      if (q) return (data as any[]).filter((b: any) => b.asset?.assetCode?.toLowerCase().includes(q) || b.asset?.item?.itemName?.toLowerCase().includes(q));
+      return data;
+    }
+
+    case 'repair_cost': {
+      const data = await api.dbQuery('asset', 'findMany', {
+        include: { item: true },
+        orderBy: { assetCode: 'asc' },
+      });
+      if (q) return (data as any[]).filter((a: any) => a.assetCode?.toLowerCase().includes(q) || a.item?.itemName?.toLowerCase().includes(q));
+      return data;
+    }
+
+    // ==================== FINANCIAL REPORTS ====================
+    case 'inventory_valuation': {
+      const where: any = { companyId, financialYearId };
+      if (selectedCategoryId) where.item = { categoryId: Number(selectedCategoryId) };
+      const grouped = await api.dbQuery('ledgerEntry', 'groupBy', {
+        by: ['itemId'], where,
+        _sum: { quantityIn: true, quantityOut: true },
+      });
+      const result: any[] = [];
+      for (const g of grouped as any[]) {
+        const qtyIn = Number(g._sum.quantityIn || 0);
+        const qtyOut = Number(g._sum.quantityOut || 0);
+        const balance = qtyIn - qtyOut;
+        if (balance <= 0) continue;
+        const item = await api.dbQuery('item', 'findUnique', { where: { id: g.itemId }, include: { category: true } });
+        result.push({ itemCode: item?.itemCode || '', itemName: item?.itemName || '', categoryName: item?.category?.name || '', quantity: balance, avgRate: 0, value: 0 });
+      }
+      if (q) return result.filter((r: any) => r.itemName?.toLowerCase().includes(q) || r.itemCode?.toLowerCase().includes(q));
+      return result;
+    }
+
+    case 'import_history': {
+      const where: any = { companyId };
+      const data = await api.dbQuery('importHistory', 'findMany', {
+        where, orderBy: { createdAt: 'desc' }, take: 2000,
+      });
+      if (q) return (data as any[]).filter((i: any) => i.fileName?.toLowerCase().includes(q) || i.importType?.toLowerCase().includes(q));
+      return data;
+    }
+
+    case 'transaction_summary': {
+      const where: any = { companyId, financialYearId, ...txDateFilter() };
+      const data = await api.dbQuery('transactionHeader', 'findMany', {
+        where, select: { voucherType: true },
+      });
+      const counts: Record<string, number> = {};
+      for (const d of data as any[]) {
+        counts[d.voucherType] = (counts[d.voucherType] || 0) + 1;
+      }
+      return Object.entries(counts).map(([voucherType, txCount]) => ({ voucherType, txCount }));
     }
 
     default:

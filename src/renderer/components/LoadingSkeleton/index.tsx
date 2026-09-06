@@ -61,6 +61,43 @@ export function PageSkeleton() {
   );
 }
 
+export function FilterBarSkeleton({ filters = 3 }: { filters?: number }) {
+  return (
+    <Paper sx={{ p: 2, mb: 2 }}>
+      <Stack direction="row" spacing={2} alignItems="center">
+        <Skeleton variant="rectangular" width={280} height={36} sx={{ borderRadius: '10px', ...pulseAnimation }} />
+        {Array.from({ length: filters }).map((_, i) => (
+          <Skeleton key={i} variant="rectangular" width={140} height={36} sx={{ borderRadius: '10px', ...pulseAnimation, animationDelay: `${(i + 1) * 0.1}s` }} />
+        ))}
+        <Box sx={{ flex: 1 }} />
+        <Skeleton variant="rectangular" width={100} height={36} sx={{ borderRadius: '10px', ...pulseAnimation, animationDelay: `${(filters + 1) * 0.1}s` }} />
+      </Stack>
+    </Paper>
+  );
+}
+
+export function MetricCardsSkeleton({ count = 4 }: { count?: number }) {
+  return (
+    <Stack direction="row" spacing={2} sx={{ mb: 3 }}>
+      {Array.from({ length: count }).map((_, i) => (
+        <CardSkeleton key={i} />
+      ))}
+    </Stack>
+  );
+}
+
+export function ListPageSkeleton({ rows = 5, columns = 5, filters = 3, showMetrics = false, metricCount = 4 }: {
+  rows?: number; columns?: number; filters?: number; showMetrics?: boolean; metricCount?: number;
+}) {
+  return (
+    <Box>
+      {showMetrics && <MetricCardsSkeleton count={metricCount} />}
+      <FilterBarSkeleton filters={filters} />
+      <TableSkeleton rows={rows} columns={columns} />
+    </Box>
+  );
+}
+
 export function PageLoader({ message, icon }: { message?: string; icon?: React.ReactNode }) {
   const theme = useTheme();
   const isDark = theme.palette.mode === 'dark';

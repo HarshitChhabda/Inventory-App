@@ -1,7 +1,7 @@
-import React, { useMemo, useCallback } from 'react';
+import React, { useMemo, useCallback, useState } from 'react';
 import {
   Box, Typography, Card, CardContent, Stack, Chip, alpha, useTheme, IconButton, Tooltip,
-  LinearProgress,
+  LinearProgress, Collapse,
 } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
@@ -9,6 +9,7 @@ import {
   Inventory as InventoryIcon, Receipt as ReceiptIcon, Assignment as AssignmentIcon,
   Warning as WarningIcon, TrendingUp, TrendingDown, Refresh, LocalShipping,
   Warehouse, Assessment, ArrowForward, Add, Transform, Delete,
+  ExpandMore, ExpandLess,
 } from '@mui/icons-material';
 import {
   ResponsiveContainer, AreaChart, Area, LineChart, Line, BarChart, Bar,
@@ -19,6 +20,7 @@ import { useCompany } from '../../context/CompanyContext';
 import { PageLoader } from '../../components/LoadingSkeleton';
 import MetricCard from '../../components/MetricCard';
 import { formatDateDDMMYYYY } from '../../utils/dateUtils';
+import { GuideButton } from '../../components/GuideSystem';
 
 const COLORS = {
   primary: '#2563EB',
@@ -93,8 +95,9 @@ export default function Dashboard() {
   const navigate = useNavigate();
   const theme = useTheme();
   const isDark = theme.palette.mode === 'dark';
+  const [showAllLowStock, setShowAllLowStock] = useState(false);
 
-  const { data: stats, isLoading, refetch } = useQuery({
+  const { data: stats, isLoading, refetch, isError } = useQuery({
     queryKey: ['dashboard', company?.id, financialYear?.id],
     queryFn: () => fetchDashboardData(company!.id, financialYear!.id),
     enabled: !!company?.id && !!financialYear?.id,
@@ -128,10 +131,31 @@ export default function Dashboard() {
 
   if (isLoading) return <PageLoader message="Loading dashboard..." icon={<InventoryIcon />} />;
 
+  if (isError) {
+    return (
+      <Box display="flex" flexDirection="column" justifyContent="center" alignItems="center" minHeight="60vh" gap={2}>
+        <Typography variant="h6" color="error" fontWeight={600}>Failed to load dashboard</Typography>
+        <Typography variant="body2" color="text.secondary">Please check your connection and try again.</Typography>
+        <Stack direction="row" spacing={1}>
+          <Tooltip title="Retry">
+            <IconButton onClick={() => refetch()} aria-label="Retry" sx={{ border: '1px solid', borderColor: 'divider' }}>
+              <Refresh />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Go to Dashboard">
+            <IconButton onClick={() => navigate('/')} aria-label="Go to Dashboard" sx={{ border: '1px solid', borderColor: 'divider' }}>
+              <ArrowForward sx={{ transform: 'rotate(180deg)' }} />
+            </IconButton>
+          </Tooltip>
+        </Stack>
+      </Box>
+    );
+  }
+
   const quickActions = [
-    { label: 'Receipt Challan', desc: 'Inward material', icon: <ReceiptIcon sx={{ fontSize: 20 }} />, color: COLORS.success, path: '/inventory/receipt-challan/new' },
-    { label: 'Issue Challan', desc: 'Outward material', icon: <LocalShipping sx={{ fontSize: 20 }} />, color: COLORS.primary, path: '/inventory/issue-challan/new' },
-    { label: 'Transfer', desc: 'Move between stores', icon: <Transform sx={{ fontSize: 20 }} />, color: COLORS.purple, path: '/inventory/transfer-challan/new' },
+    { label: 'Goods Receipt', desc: 'Inward material', icon: <ReceiptIcon sx={{ fontSize: 20 }} />, color: COLORS.success, path: '/procurement/grn/new' },
+    { label: 'Store Issue', desc: 'Outward material', icon: <LocalShipping sx={{ fontSize: 20 }} />, color: COLORS.primary, path: '/inventory/issue-challan/new' },
+    { label: 'Store Transfer', desc: 'Move between stores', icon: <Transform sx={{ fontSize: 20 }} />, color: COLORS.purple, path: '/inventory/transfer-challan/new' },
     { label: 'Damage Entry', desc: 'Record damage', icon: <Delete sx={{ fontSize: 20 }} />, color: COLORS.danger, path: '/inventory/damage-entry' },
   ];
 
@@ -149,7 +173,7 @@ export default function Dashboard() {
   };
 
   return (
-    <Box>
+    <Box aria-label="Dashboard overview">
       {/* Page Header */}
       <Box sx={{ mb: 2.5, display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', sm: 'center' }, gap: 1.5 }}>
         <Box>
@@ -160,38 +184,40 @@ export default function Dashboard() {
             Dashboard
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ fontSize: '0.8125rem' }}>
-            {company.name} &bull; {financialYear.label}
+            {company.name}
           </Typography>
         </Box>
-        <Tooltip title="Refresh data">
-          <IconButton
-            onClick={() => refetch()}
-            size="small"
-            sx={{
-              color: 'text.secondary',
-              border: '1px solid',
-              borderColor: 'divider',
-              borderRadius: '10px',
-              width: 36, height: 36,
-              '&:hover': { backgroundColor: 'action.hover' },
-            }}
-          >
-            <Refresh fontSize="small" />
-          </IconButton>
-        </Tooltip>
+        <Stack direction="row" spacing={1} alignItems="center">
+          <GuideButton pageId="dashboard" />
+          <Tooltip title="Refresh data">
+            <IconButton
+              onClick={() => refetch()}
+              size="small"
+              aria-label="Refresh dashboard data"
+              sx={{
+                color: 'text.secondary',
+                border: '1px solid',
+                borderColor: 'divider',
+                borderRadius: '10px',
+                width: 36, height: 36,
+                '&:hover': { backgroundColor: 'action.hover' },
+              }}
+            >
+              <Refresh fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        </Stack>
       </Box>
 
       <QuickActions actions={quickActions} isDark={isDark} />
 
       {/* KPI Metric Cards */}
-      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2, 1fr)', sm: 'repeat(2, 1fr)', md: 'repeat(4, 1fr)' }, gap: 1.25, mb: 2.5 }}>
+      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2, 1fr)', sm: 'repeat(2, 1fr)', md: 'repeat(4, 1fr)' }, gap: 1.25, mb: 2.5 }} role="region" aria-label="Key performance indicators">
         <MetricCard
           title="Total Items"
           value={stats?.totalItems || 0}
           icon={<InventoryIcon sx={{ fontSize: 20 }} />}
           color={COLORS.primary}
-          trend="+12%"
-          trendUp
           onClick={() => navigate('/masters/items')}
           delay={200}
         />
@@ -201,8 +227,6 @@ export default function Dashboard() {
           prefix="₹"
           icon={<Warehouse sx={{ fontSize: 20 }} />}
           color={COLORS.success}
-          trend="+8%"
-          trendUp
           onClick={() => navigate('/inventory/stock-ledger')}
           delay={260}
           format="currency"
@@ -212,8 +236,6 @@ export default function Dashboard() {
           value={stats?.availableQty || 0}
           icon={<Assessment sx={{ fontSize: 20 }} />}
           color={COLORS.info}
-          trend="+5%"
-          trendUp
           onClick={() => navigate('/inventory/stock-ledger')}
           delay={320}
         />
@@ -232,6 +254,8 @@ export default function Dashboard() {
       {/* Pending Drafts Alert */}
       {stats?.pendingDrafts ? stats.pendingDrafts > 0 && (
         <Card
+          role="alert"
+          aria-label={`${stats.pendingDrafts} pending drafts await review`}
           sx={{
             mb: 2,
             borderLeft: `3px solid ${COLORS.primary}`,
@@ -255,7 +279,10 @@ export default function Dashboard() {
               </Stack>
               <Typography
                 variant="caption"
-                onClick={() => navigate('/inventory/receipt-challan')}
+                onClick={() => navigate('/procurement/grn')}
+                role="button"
+                tabIndex={0}
+                aria-label="Review pending drafts now"
                 sx={{
                   color: COLORS.primary, cursor: 'pointer', fontWeight: 600,
                   display: 'flex', alignItems: 'center', gap: 0.5,
@@ -269,34 +296,27 @@ export default function Dashboard() {
         </Card>
       ) : null}
 
-      {/* Low Stock Alerts */}
-      {stats?.lowStockItemsDetail && stats.lowStockItemsDetail.length > 0 && (
+      {/* Today's Activity */}
+      {stats?.recentTransactions && stats.recentTransactions.length > 0 && (
         <Card sx={{
           mb: 2,
-          borderLeft: `3px solid ${COLORS.warning}`,
-          animation: 'fadeInUp 400ms cubic-bezier(0.16, 1, 0.3, 1) 480ms forwards',
+          animation: 'fadeInUp 400ms cubic-bezier(0.16, 1, 0.3, 1) 460ms forwards',
           opacity: 0,
         }}>
           <CardContent sx={{ p: '14px 16px !important' }}>
             <Stack direction="row" alignItems="center" justifyContent="space-between" mb={1.25}>
               <Stack direction="row" alignItems="center" spacing={0.75}>
-                <WarningIcon sx={{ fontSize: 16, color: COLORS.warning }} />
-                <Typography variant="h6" sx={{ fontWeight: 700, fontSize: '0.8125rem', color: COLORS.warning }}>
-                  Low Stock Alerts
+                <AssignmentIcon sx={{ fontSize: 16, color: COLORS.info }} />
+                <Typography variant="h6" sx={{ fontWeight: 700, fontSize: '0.8125rem', color: COLORS.info }}>
+                  Recent Activity
                 </Typography>
-                <Chip
-                  label={stats.lowStockItemsDetail.length}
-                  size="small"
-                  sx={{
-                    height: 18, fontSize: '0.5625rem', fontWeight: 700,
-                    backgroundColor: alpha(COLORS.warning, 0.1),
-                    color: COLORS.warning,
-                  }}
-                />
               </Stack>
               <Typography
                 variant="caption"
-                onClick={() => navigate('/reports')}
+                onClick={() => navigate('/inventory/stock-ledger')}
+                role="button"
+                tabIndex={0}
+                aria-label="View all activity"
                 sx={{
                   color: COLORS.primary, cursor: 'pointer', fontWeight: 600,
                   '&:hover': { textDecoration: 'underline' },
@@ -305,54 +325,185 @@ export default function Dashboard() {
                 View All
               </Typography>
             </Stack>
-            <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2, 1fr)', sm: 'repeat(3, 1fr)', md: 'repeat(3, 1fr)' }, gap: 1 }}>
-              {stats.lowStockItemsDetail.map((item: any, index: number) => {
-                const pct = item.minimumStockLevel > 0 ? Math.min(100, (item.currentBalance / item.minimumStockLevel) * 100) : 0;
-                return (
-                  <Box
-                    key={item.id}
-                    onClick={() => navigate(`/inventory/item-history?itemId=${item.id}`)}
-                    sx={{
-                      p: 1.25, borderRadius: '10px', cursor: 'pointer',
-                      border: `1px solid ${isDark ? '#334155' : '#E2E8F0'}`,
-                      transition: 'all 150ms ease-out',
-                      '&:hover': {
-                        borderColor: COLORS.warning,
-                        backgroundColor: alpha(COLORS.warning, 0.03),
-                        transform: 'translateY(-1px)',
-                      },
-                    }}
-                  >
-                    <Stack direction="row" justifyContent="space-between" alignItems="center" mb={0.5}>
-                      <Typography variant="body2" fontWeight={600} sx={{ fontSize: '0.75rem', lineHeight: 1.3 }}>
-                        {item.itemName}
-                      </Typography>
-                      <Chip label={item.unit?.name || 'N/A'} size="small" sx={{ height: 16, fontSize: '0.5625rem' }} />
-                    </Stack>
-                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5, fontSize: '0.625rem' }}>
-                      Min: {item.minimumStockLevel} &bull; Current: {item.currentBalance}
+            <Stack spacing={0.75}>
+              {stats.recentTransactions.slice(0, 5).map((tx: any, idx: number) => (
+                <Stack
+                  key={idx}
+                  direction="row"
+                  alignItems="center"
+                  justifyContent="space-between"
+                  sx={{
+                    py: 0.75, px: 1, borderRadius: '8px',
+                    '&:hover': { bgcolor: isDark ? 'rgba(255,255,255,0.04)' : '#F8FAFC' },
+                    cursor: 'pointer',
+                  }}
+                  onClick={() => navigate(`/inventory/item-history?itemId=${tx.itemId}`)}
+                >
+                  <Stack direction="row" alignItems="center" spacing={1}>
+                    <Box sx={{
+                      width: 6, height: 6, borderRadius: '50%',
+                      backgroundColor: tx.quantityIn ? COLORS.success : COLORS.warning,
+                    }} />
+                    <Typography variant="body2" sx={{ fontWeight: 500, fontSize: '0.8125rem' }}>
+                      {typeof tx.item === 'string' ? tx.item : tx.item?.itemName || 'Unknown Item'}
                     </Typography>
-                    <LinearProgress
-                      variant="determinate"
-                      value={pct}
+                  </Stack>
+                  <Stack direction="row" alignItems="center" spacing={1}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.6875rem' }}>
+                      {tx.transactionType}
+                    </Typography>
+                    <Chip
+                      label={tx.quantityIn ? `+${tx.quantityIn}` : `-${tx.quantityOut}`}
+                      size="small"
                       sx={{
-                        height: 3, borderRadius: 2,
-                        backgroundColor: alpha(COLORS.warning, 0.12),
-                        '& .MuiLinearProgress-bar': { borderRadius: 2, backgroundColor: pct < 50 ? COLORS.danger : COLORS.warning },
+                        height: 18, fontSize: '0.625rem', fontWeight: 600,
+                        backgroundColor: tx.quantityIn ? alpha(COLORS.success, 0.1) : alpha(COLORS.warning, 0.1),
+                        color: tx.quantityIn ? COLORS.success : COLORS.warning,
                       }}
                     />
-                  </Box>
-                );
-              })}
-            </Box>
+                  </Stack>
+                </Stack>
+              ))}
+            </Stack>
           </CardContent>
         </Card>
       )}
 
+      {/* Low Stock Alerts */}
+      {stats?.lowStockItemsDetail && stats.lowStockItemsDetail.length > 0 && (() => {
+        const sorted = [...stats.lowStockItemsDetail].sort((a: any, b: any) => {
+          const pctA = a.minimumStockLevel > 0 ? a.currentBalance / a.minimumStockLevel : 0;
+          const pctB = b.minimumStockLevel > 0 ? b.currentBalance / b.minimumStockLevel : 0;
+          return pctA - pctB;
+        });
+        const VISIBLE_COUNT = 6;
+        const visibleItems = showAllLowStock ? sorted : sorted.slice(0, VISIBLE_COUNT);
+        const hasMore = sorted.length > VISIBLE_COUNT;
+        const criticalCount = sorted.filter((i: any) => i.minimumStockLevel > 0 && (i.currentBalance / i.minimumStockLevel) < 0.5).length;
+        return (
+          <Card sx={{
+            mb: 2,
+            borderLeft: `3px solid ${COLORS.warning}`,
+            animation: 'fadeInUp 400ms cubic-bezier(0.16, 1, 0.3, 1) 480ms forwards',
+            opacity: 0,
+          }}
+            role="region"
+            aria-label="Low stock alerts"
+          >
+            <CardContent sx={{ p: '14px 16px !important' }}>
+              <Stack direction="row" alignItems="center" justifyContent="space-between" mb={1.25}>
+                <Stack direction="row" alignItems="center" spacing={0.75}>
+                  <WarningIcon sx={{ fontSize: 16, color: COLORS.warning }} />
+                  <Typography variant="h6" sx={{ fontWeight: 700, fontSize: '0.8125rem', color: COLORS.warning }}>
+                    Low Stock Alerts
+                  </Typography>
+                  <Chip
+                    label={stats.lowStockItemsDetail.length}
+                    size="small"
+                    sx={{
+                      height: 18, fontSize: '0.5625rem', fontWeight: 700,
+                      backgroundColor: alpha(COLORS.warning, 0.1),
+                      color: COLORS.warning,
+                    }}
+                  />
+                  {criticalCount > 0 && (
+                    <Chip
+                      label={`${criticalCount} critical`}
+                      size="small"
+                      sx={{
+                        height: 18, fontSize: '0.5625rem', fontWeight: 700,
+                        backgroundColor: alpha(COLORS.danger, 0.1),
+                        color: COLORS.danger,
+                      }}
+                    />
+                  )}
+                </Stack>
+                <Stack direction="row" alignItems="center" spacing={1}>
+                  {hasMore && (
+                    <Typography
+                      variant="caption"
+                      onClick={() => setShowAllLowStock(!showAllLowStock)}
+                      role="button"
+                      tabIndex={0}
+                      sx={{
+                        color: COLORS.primary, cursor: 'pointer', fontWeight: 600,
+                        display: 'flex', alignItems: 'center', gap: 0.5,
+                        '&:hover': { textDecoration: 'underline' },
+                      }}
+                    >
+                      {showAllLowStock ? 'Show less' : `Show all (${sorted.length})`}
+                      {showAllLowStock ? <ExpandLess sx={{ fontSize: 14 }} /> : <ExpandMore sx={{ fontSize: 14 }} />}
+                    </Typography>
+                  )}
+                  <Typography
+                    variant="caption"
+                    onClick={() => navigate('/reports')}
+                    role="button"
+                    tabIndex={0}
+                    aria-label="View all low stock items"
+                    sx={{
+                      color: COLORS.primary, cursor: 'pointer', fontWeight: 600,
+                      '&:hover': { textDecoration: 'underline' },
+                    }}
+                  >
+                    View All
+                  </Typography>
+                </Stack>
+              </Stack>
+              <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2, 1fr)', sm: 'repeat(3, 1fr)', md: 'repeat(3, 1fr)' }, gap: 1 }}>
+                {visibleItems.map((item: any) => {
+                  const pct = item.minimumStockLevel > 0 ? Math.min(100, (item.currentBalance / item.minimumStockLevel) * 100) : 0;
+                  const isCritical = pct < 50;
+                  return (
+                    <Box
+                      key={item.id}
+                      role="button"
+                      tabIndex={0}
+                      aria-label={`${item.itemName}: current ${item.currentBalance}, minimum ${item.minimumStockLevel}`}
+                      onClick={() => navigate(`/inventory/item-history?itemId=${item.id}`)}
+                      sx={{
+                        p: 1.25, borderRadius: '10px', cursor: 'pointer',
+                        border: `1px solid ${isCritical ? alpha(COLORS.danger, 0.3) : isDark ? '#334155' : '#E2E8F0'}`,
+                        backgroundColor: isCritical ? alpha(COLORS.danger, 0.02) : 'transparent',
+                        transition: 'all 150ms ease-out',
+                        '&:hover': {
+                          borderColor: isCritical ? COLORS.danger : COLORS.warning,
+                          backgroundColor: alpha(isCritical ? COLORS.danger : COLORS.warning, 0.03),
+                          transform: 'translateY(-1px)',
+                        },
+                      }}
+                    >
+                      <Stack direction="row" justifyContent="space-between" alignItems="center" mb={0.5}>
+                        <Typography variant="body2" fontWeight={600} sx={{ fontSize: '0.75rem', lineHeight: 1.3 }}>
+                          {item.itemName}
+                        </Typography>
+                        <Chip label={item.unit?.name || '-'} size="small" sx={{ height: 16, fontSize: '0.5625rem' }} />
+                      </Stack>
+                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5, fontSize: '0.625rem' }}>
+                        Min: {item.minimumStockLevel} &bull; Current: {item.currentBalance}
+                      </Typography>
+                      <LinearProgress
+                        variant="determinate"
+                        value={pct}
+                        sx={{
+                          height: 3, borderRadius: 2,
+                          backgroundColor: alpha(isCritical ? COLORS.danger : COLORS.warning, 0.12),
+                          '& .MuiLinearProgress-bar': { borderRadius: 2, backgroundColor: isCritical ? COLORS.danger : COLORS.warning },
+                        }}
+                      />
+                    </Box>
+                  );
+                })}
+              </Box>
+            </CardContent>
+          </Card>
+        );
+      })()}
+
       {/* Charts Section */}
-      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 1.5, mb: 2 }}>
+      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 1.5, mb: 2 }} role="region" aria-label="Stock analytics charts">
         {/* Stock Value Trend */}
-        <Card sx={{ animation: 'fadeInUp 400ms ease-out 520ms forwards', opacity: 0 }}>
+        <Card sx={{ animation: 'fadeInUp 400ms ease-out 520ms forwards', opacity: 0 }} aria-label="Stock value trend chart">
           <CardContent sx={{ p: '14px 16px !important' }}>
             <Typography variant="h6" sx={{ fontWeight: 700, mb: 0.25, fontSize: '0.8125rem' }}>Stock Value Trend</Typography>
             <Typography variant="caption" color="text.secondary" sx={{ mb: 1.5, display: 'block', fontSize: '0.6875rem' }}>Last 12 months</Typography>
@@ -377,7 +528,7 @@ export default function Dashboard() {
         </Card>
 
         {/* Inventory Movement */}
-        <Card sx={{ animation: 'fadeInUp 400ms ease-out 560ms forwards', opacity: 0 }}>
+        <Card sx={{ animation: 'fadeInUp 400ms ease-out 560ms forwards', opacity: 0 }} aria-label="Inventory movement chart">
           <CardContent sx={{ p: '14px 16px !important' }}>
             <Typography variant="h6" sx={{ fontWeight: 700, mb: 0.25, fontSize: '0.8125rem' }}>Inventory Movement</Typography>
             <Typography variant="caption" color="text.secondary" sx={{ mb: 1.5, display: 'block', fontSize: '0.6875rem' }}>Inbound vs Outbound</Typography>
@@ -399,9 +550,9 @@ export default function Dashboard() {
       </Box>
 
       {/* Charts Row 2 */}
-      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 1.5, mb: 2 }}>
+      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 1.5, mb: 2 }} role="region" aria-label="Consumption and category charts">
         {/* Top Consumed Items */}
-        <Card sx={{ animation: 'fadeInUp 400ms ease-out 600ms forwards', opacity: 0 }}>
+        <Card sx={{ animation: 'fadeInUp 400ms ease-out 600ms forwards', opacity: 0 }} aria-label="Top consumed items chart">
           <CardContent sx={{ p: '14px 16px !important' }}>
             <Typography variant="h6" sx={{ fontWeight: 700, mb: 0.25, fontSize: '0.8125rem' }}>Top Consumed Items</Typography>
             <Typography variant="caption" color="text.secondary" sx={{ mb: 1.5, display: 'block', fontSize: '0.6875rem' }}>By quantity consumed</Typography>
@@ -420,7 +571,7 @@ export default function Dashboard() {
         </Card>
 
         {/* Category Distribution */}
-        <Card sx={{ animation: 'fadeInUp 400ms ease-out 640ms forwards', opacity: 0 }}>
+        <Card sx={{ animation: 'fadeInUp 400ms ease-out 640ms forwards', opacity: 0 }} aria-label="Category distribution chart">
           <CardContent sx={{ p: '14px 16px !important' }}>
             <Typography variant="h6" sx={{ fontWeight: 700, mb: 0.25, fontSize: '0.8125rem' }}>Category Distribution</Typography>
             <Typography variant="caption" color="text.secondary" sx={{ mb: 1.5, display: 'block', fontSize: '0.6875rem' }}>Stock by category</Typography>
@@ -450,9 +601,9 @@ export default function Dashboard() {
       </Box>
 
       {/* Charts Row 3 */}
-      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 1.5, mb: 2 }}>
+      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 1.5, mb: 2 }} role="region" aria-label="Department and receipt charts">
         {/* Department Consumption */}
-        <Card sx={{ animation: 'fadeInUp 400ms ease-out 680ms forwards', opacity: 0 }}>
+        <Card sx={{ animation: 'fadeInUp 400ms ease-out 680ms forwards', opacity: 0 }} aria-label="Department consumption chart">
           <CardContent sx={{ p: '14px 16px !important' }}>
             <Typography variant="h6" sx={{ fontWeight: 700, mb: 0.25, fontSize: '0.8125rem' }}>Department Consumption</Typography>
             <Typography variant="caption" color="text.secondary" sx={{ mb: 1.5, display: 'block', fontSize: '0.6875rem' }}>By department</Typography>
@@ -471,7 +622,7 @@ export default function Dashboard() {
         </Card>
 
         {/* Receipt vs Issue */}
-        <Card sx={{ animation: 'fadeInUp 400ms ease-out 720ms forwards', opacity: 0 }}>
+        <Card sx={{ animation: 'fadeInUp 400ms ease-out 720ms forwards', opacity: 0 }} aria-label="Receipt versus issue comparison chart">
           <CardContent sx={{ p: '14px 16px !important' }}>
             <Typography variant="h6" sx={{ fontWeight: 700, mb: 0.25, fontSize: '0.8125rem' }}>Receipt vs Issue</Typography>
             <Typography variant="caption" color="text.secondary" sx={{ mb: 1.5, display: 'block', fontSize: '0.6875rem' }}>Monthly comparison</Typography>
@@ -493,7 +644,7 @@ export default function Dashboard() {
       </Box>
 
       {/* Recent Transactions */}
-      <Card sx={{ animation: 'fadeInUp 400ms ease-out 760ms forwards', opacity: 0 }}>
+      <Card sx={{ animation: 'fadeInUp 400ms ease-out 760ms forwards', opacity: 0 }} aria-label="Recent transactions">
         <CardContent sx={{ p: '14px 16px !important' }}>
           <Stack direction="row" alignItems="center" justifyContent="space-between" mb={1.25}>
             <Box>
@@ -503,6 +654,9 @@ export default function Dashboard() {
             <Typography
               variant="caption"
               onClick={() => navigate('/inventory/stock-ledger')}
+              role="button"
+              tabIndex={0}
+              aria-label="View all transactions"
               sx={{
                 color: COLORS.primary, cursor: 'pointer', fontWeight: 600,
                 display: 'flex', alignItems: 'center', gap: 0.25,
@@ -517,6 +671,9 @@ export default function Dashboard() {
               <Box
                 key={idx}
                 onClick={() => navigate(`/inventory/item-history?itemId=${tx.itemId}`)}
+                role="button"
+                tabIndex={0}
+                aria-label={`${typeof tx.item === 'string' ? tx.item : tx.item?.itemName || 'Item'}: ${tx.quantityIn ? 'received' : 'issued'} ${tx.quantityIn || tx.quantityOut} units`}
                 sx={{
                   py: 0.875, px: 0.5, borderRadius: '8px', cursor: 'pointer',
                   display: 'flex', justifyContent: 'space-between', alignItems: 'center',

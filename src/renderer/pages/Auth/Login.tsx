@@ -1,11 +1,24 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
 import {
   Box, Typography, TextField, Button, Paper, CircularProgress, alpha, useTheme,
-  InputAdornment, IconButton, Grid
+  InputAdornment, IconButton, Grid, Checkbox, FormControlLabel
 } from '@mui/material';
 import { LockOutlined, Visibility, VisibilityOff, Inventory2Outlined, VerifiedUserOutlined, SecurityOutlined } from '@mui/icons-material';
 import { useAuth } from '../../context/AuthContext';
 import { useCompany } from '../../context/CompanyContext';
+
+const REMEMBER_KEY = 'login.rememberUsername';
+const REMEMBER_USER_KEY = 'login.savedUsername';
+
+const loginSchema = z.object({
+  username: z.string().min(1, 'Username required'),
+  password: z.string().min(1, 'Password required'),
+});
+
+type LoginFormData = z.infer<typeof loginSchema>;
 
 export default function Login() {
   const { login } = useAuth();
@@ -13,22 +26,54 @@ export default function Login() {
   const theme = useTheme();
   const isDark = theme.palette.mode === 'dark';
 
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
+  const [savedUsername, setSavedUsername] = useState('');
+  const [rememberUsername, setRememberUsername] = useState(false);
+
+  const { register, handleSubmit: formSubmit, formState: { errors, isValid }, setValue } = useForm<LoginFormData>({
+    resolver: zodResolver(loginSchema),
+    mode: 'onChange',
+    defaultValues: { username: '', password: '' },
+  });
+
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const canSubmit = username.trim().length > 0 && password.length > 0 && !loading;
+  useEffect(() => {
+    try {
+      const remembered = localStorage.getItem(REMEMBER_KEY) === 'true';
+      const savedUser = localStorage.getItem(REMEMBER_USER_KEY) || '';
+      setRememberUsername(remembered);
+      setSavedUsername(savedUser);
+      if (remembered && savedUser) {
+        setValue('username', savedUser);
+      }
+    } catch {}
+  }, [setValue]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!canSubmit) return;
+  const handleRememberChange = (checked: boolean) => {
+    setRememberUsername(checked);
+    try {
+      if (!checked) {
+        localStorage.removeItem(REMEMBER_KEY);
+        localStorage.removeItem(REMEMBER_USER_KEY);
+      }
+    } catch {}
+  };
 
+  const canSubmit = isValid && !loading;
+
+  const onSubmit = async (data: LoginFormData) => {
     setError('');
     setLoading(true);
     try {
-      await login(username.trim(), password);
+      await login(data.username.trim(), data.password);
+      if (rememberUsername) {
+        try {
+          localStorage.setItem(REMEMBER_KEY, 'true');
+          localStorage.setItem(REMEMBER_USER_KEY, data.username.trim());
+        } catch {}
+      }
     } catch (err: any) {
       setError(err?.message || 'Login failed. Please check your credentials.');
     } finally {
@@ -71,7 +116,7 @@ export default function Login() {
               <img src="/icon.png" alt="Logo" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
             </Box>
             <Typography variant="h4" sx={{ fontWeight: 700, letterSpacing: '0', fontFamily: '"Kokila", "Plus Jakarta Sans", sans-serif', fontSize: '2.2rem' }}>
-              दिगम्बर जैन अतिशय क्षेत्र श्री महावीरजी
+              Digambar Jain Atishay Kshetra Shri Mahaveer JI
             </Typography>
           </Box>
           <Typography variant="h2" sx={{ fontWeight: 700, mb: 3, letterSpacing: '-0.02em', fontSize: { md: '2.5rem', lg: '3.5rem' }, lineHeight: 1.2, fontFamily: '"Kokila", "Plus Jakarta Sans", sans-serif' }}>
@@ -177,7 +222,7 @@ export default function Login() {
                 <img src="/icon.png" alt="Logo" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
               </Box>
               <Typography variant="h6" sx={{ fontWeight: 700, fontFamily: '"Kokila", "Plus Jakarta Sans", sans-serif', fontSize: '1.5rem', letterSpacing: '0' }}>
-                दिगम्बर जैन अतिशय क्षेत्र श्री महावीरजी
+                Digambar Jain Atishay Kshetra Shri Mahaveer JI
               </Typography>
             </Box>
 
@@ -189,17 +234,17 @@ export default function Login() {
             </Typography>
           </Box>
 
-          <Box component="form" onSubmit={handleSubmit} noValidate>
+          <Box component="form" onSubmit={formSubmit(onSubmit)} noValidate aria-label="Sign in form">
             <Typography variant="body2" sx={{ fontWeight: 600, color: 'text.primary', mb: 1, ml: 0.5 }}>
               Username
             </Typography>
             <TextField
               fullWidth
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
+              {...register('username')}
               autoFocus
               autoComplete="username"
               placeholder="Enter your username"
+              inputProps={{ 'aria-label': 'Username', 'aria-required': 'true' }}
               sx={{ 
                 mb: 3,
                 '& .MuiOutlinedInput-root': {
@@ -220,10 +265,10 @@ export default function Login() {
             <TextField
               fullWidth
               type={showPassword ? 'text' : 'password'}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              {...register('password')}
               autoComplete="current-password"
               placeholder="Enter your password"
+              inputProps={{ 'aria-label': 'Password', 'aria-required': 'true' }}
               sx={{ 
                 mb: 1,
                 '& .MuiOutlinedInput-root': {
@@ -253,9 +298,26 @@ export default function Login() {
               }}
             />
 
-            <Box sx={{ minHeight: 24, mb: 3, mt: 1 }}>
+            <FormControlLabel
+              control={
+                <Checkbox
+                  checked={rememberUsername}
+                  onChange={(e) => handleRememberChange(e.target.checked)}
+                  size="small"
+                  sx={{ color: isDark ? '#64748B' : '#94A3B8', '&.Mui-checked': { color: '#0EA5E9' } }}
+                />
+              }
+              label={
+                <Typography variant="body2" sx={{ color: 'text.secondary', fontSize: '0.8125rem' }}>
+                  Remember username
+                </Typography>
+              }
+              sx={{ mb: 1, ml: 0 }}
+            />
+
+            <Box sx={{ minHeight: 24, mb: 3, mt: 1 }} aria-live="polite">
               {error && (
-                <Typography variant="body2" sx={{ color: '#EF4444', fontSize: '0.8125rem', display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                <Typography variant="body2" role="alert" sx={{ color: '#EF4444', fontSize: '0.8125rem', display: 'flex', alignItems: 'center', gap: 0.5 }}>
                   <span style={{ fontWeight: 600 }}>Error:</span> {error}
                 </Typography>
               )}
@@ -267,6 +329,7 @@ export default function Login() {
               variant="contained"
               disabled={!canSubmit}
               disableElevation
+              aria-label="Sign in to dashboard"
               sx={{
                 py: 1.75,
                 fontWeight: 700,

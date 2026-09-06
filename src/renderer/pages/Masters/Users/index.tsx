@@ -10,8 +10,30 @@ import { Add, Edit, Delete, Search, People, Lock, VpnKey } from '@mui/icons-mate
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import PageHeader from '../../../components/PageHeader';
 import EmptyState from '../../../components/EmptyState';
+import { TableSkeleton } from '../../../components/LoadingSkeleton';
 import { useAuth } from '../../../context/AuthContext';
 import toast from 'react-hot-toast';
+import { getErrorMessage } from '../../../utils/errorUtils';
+import { GuideButton } from '../../../components/GuideSystem';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
+
+const userSchema = z.object({
+  username: z.string().min(1, 'Username is required'),
+  password: z.string().min(1, 'Password is required'),
+  fullName: z.string().min(1, 'Full name is required'),
+  role: z.string().min(1, 'Role is required'),
+  isActive: z.boolean(),
+});
+type UserFormData = z.infer<typeof userSchema>;
+
+const userEditSchema = z.object({
+  fullName: z.string().min(1, 'Full name is required'),
+  role: z.string().min(1, 'Role is required'),
+  isActive: z.boolean(),
+});
+type UserEditFormData = z.infer<typeof userEditSchema>;
 
 function parsePermissions(p: any): string[] {
   if (Array.isArray(p)) return p;
@@ -30,6 +52,14 @@ const PERMISSION_LABELS: Record<string, string> = {
   manage_company: 'Manage Company',
 };
 
+const ROLE_LABELS: Record<string, string> = {
+  ADMIN: 'Admin',
+  STORE_MANAGER: 'Store Manager',
+  DEPARTMENT_MANAGER: 'Department Manager',
+  PURCHASE_MANAGER: 'Purchase Manager',
+  VIEWER: 'Viewer',
+};
+
 const ALL_PERMISSION_KEYS = Object.keys(PERMISSION_LABELS);
 
 export default function UsersPage() {
@@ -46,17 +76,16 @@ export default function UsersPage() {
   const [selectedUser, setSelectedUser] = useState<any>(null);
   const [newTempPassword, setNewTempPassword] = useState('');
 
-  const [createForm, setCreateForm] = useState({
-    username: '',
-    password: '',
-    fullName: '',
-    role: 'USER',
+  const { register: registerCreate, handleSubmit: handleSubmitCreate, reset: resetCreate, watch: watchCreate, setValue: setValueCreate, formState: { errors: errorsCreate, isValid: isValidCreate } } = useForm<UserFormData>({
+    resolver: zodResolver(userSchema),
+    mode: 'onChange',
+    defaultValues: { username: '', password: '', fullName: '', role: 'VIEWER', isActive: true },
   });
 
-  const [editForm, setEditForm] = useState({
-    fullName: '',
-    role: 'USER',
-    isActive: true,
+  const { register: registerEdit, handleSubmit: handleSubmitEdit, reset: resetEdit, watch: watchEdit, setValue: setValueEdit, formState: { errors: errorsEdit, isValid: isValidEdit } } = useForm<UserEditFormData>({
+    resolver: zodResolver(userEditSchema),
+    mode: 'onChange',
+    defaultValues: { fullName: '', role: 'USER', isActive: true },
   });
 
   const [permissionForm, setPermissionForm] = useState<string[]>([]);
@@ -72,10 +101,10 @@ export default function UsersPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['users'] });
       setCreateDialogOpen(false);
-      setCreateForm({ username: '', password: '', fullName: '', role: 'USER' });
+      resetCreate({ username: '', password: '', fullName: '', role: 'VIEWER', isActive: true });
       toast.success('User created successfully');
     },
-    onError: (err: any) => toast.error(err.message || 'Failed to create user'),
+    onError: (err: any) => toast.error(getErrorMessage(err, 'Failed to create user')),
   });
 
   const updateMutation = useMutation({
@@ -87,7 +116,7 @@ export default function UsersPage() {
       setSelectedUser(null);
       toast.success('User updated successfully');
     },
-    onError: (err: any) => toast.error(err.message || 'Failed to update user'),
+    onError: (err: any) => toast.error(getErrorMessage(err, 'Failed to update user')),
   });
 
   const toggleActiveMutation = useMutation({
@@ -97,7 +126,7 @@ export default function UsersPage() {
       queryClient.invalidateQueries({ queryKey: ['users'] });
       toast.success('User status updated');
     },
-    onError: (err: any) => toast.error(err.message || 'Failed to update user'),
+    onError: (err: any) => toast.error(getErrorMessage(err, 'Failed to update user')),
   });
 
   const savePermissionsMutation = useMutation({
@@ -109,7 +138,7 @@ export default function UsersPage() {
       setSelectedUser(null);
       toast.success('Permissions updated');
     },
-    onError: (err: any) => toast.error(err.message || 'Failed to update permissions'),
+    onError: (err: any) => toast.error(getErrorMessage(err, 'Failed to update permissions')),
   });
 
   const resetPasswordMutation = useMutation({
@@ -122,7 +151,7 @@ export default function UsersPage() {
       queryClient.invalidateQueries({ queryKey: ['users'] });
       toast.success('Password reset successfully');
     },
-    onError: (err: any) => toast.error(err.message || 'Failed to reset password'),
+    onError: (err: any) => toast.error(getErrorMessage(err, 'Failed to reset password')),
   });
 
   const deleteMutation = useMutation({
@@ -133,7 +162,7 @@ export default function UsersPage() {
       setSelectedUser(null);
       toast.success('User deleted');
     },
-    onError: (err: any) => toast.error(err.message || 'Failed to delete user'),
+    onError: (err: any) => toast.error(getErrorMessage(err, 'Failed to delete user')),
   });
 
   const filteredUsers = (users || []).filter((u: any) => {
@@ -151,17 +180,13 @@ export default function UsersPage() {
     return true;
   };
 
-  const handleCreate = () => {
-    if (!createForm.username || !createForm.password || !createForm.fullName) {
-      toast.error('All fields are required');
-      return;
-    }
-    createMutation.mutate(createForm);
+  const handleCreateSubmit = (data: UserFormData) => {
+    createMutation.mutate(data);
   };
 
-  const handleEdit = () => {
+  const handleEditSubmit = (data: UserEditFormData) => {
     if (!selectedUser) return;
-    updateMutation.mutate({ userId: selectedUser.id, data: editForm });
+    updateMutation.mutate({ userId: selectedUser.id, data });
   };
 
   const handleSavePermissions = () => {
@@ -189,13 +214,16 @@ export default function UsersPage() {
         title="User Management"
         subtitle="Manage user accounts, roles, and permissions"
         actions={
-          <Button
-            variant="contained"
-            startIcon={<Add />}
-            onClick={() => setCreateDialogOpen(true)}
-          >
-            Create User
-          </Button>
+          <Stack direction="row" spacing={1} alignItems="center">
+            <GuideButton pageId="users" />
+            <Button
+              variant="contained"
+              startIcon={<Add />}
+              onClick={() => setCreateDialogOpen(true)}
+            >
+              Create User
+            </Button>
+          </Stack>
         }
       />
 
@@ -224,7 +252,15 @@ export default function UsersPage() {
             </TableRow>
           </TableHead>
           <TableBody>
-            {filteredUsers.map((user: any) => (
+            {isLoading ? (
+              <TableRow>
+                <TableCell colSpan={6} sx={{ p: 0, border: 'none' }}>
+                  <Box sx={{ py: 2 }}>
+                    <TableSkeleton rows={5} columns={5} />
+                  </Box>
+                </TableCell>
+              </TableRow>
+            ) : filteredUsers.map((user: any) => (
               <TableRow key={user.id} hover>
                 <TableCell>
                   <Stack direction="row" alignItems="center" spacing={1.5}>
@@ -245,7 +281,7 @@ export default function UsersPage() {
                 <TableCell><Typography variant="body2" sx={{ fontFamily: 'monospace' }}>{user.username}</Typography></TableCell>
                 <TableCell>
                   <Chip
-                    label={user.role}
+                    label={ROLE_LABELS[user.role] || user.role}
                     size="small"
                     color={user.role === 'ADMIN' ? 'primary' : 'default'}
                     variant={user.role === 'ADMIN' ? 'filled' : 'outlined'}
@@ -280,7 +316,7 @@ export default function UsersPage() {
                       size="small"
                       onClick={() => {
                         setSelectedUser(user);
-                        setEditForm({ fullName: user.fullName, role: user.role, isActive: user.isActive });
+                        resetEdit({ fullName: user.fullName, role: user.role, isActive: user.isActive });
                         setEditDialogOpen(true);
                       }}
                       sx={{ color: 'text.secondary', '&:hover': { color: 'primary.main', bgcolor: alpha(theme.palette.primary.main, 0.08) } }}
@@ -331,7 +367,7 @@ export default function UsersPage() {
                 </TableCell>
               </TableRow>
             ))}
-            {filteredUsers.length === 0 && (
+            {!isLoading && filteredUsers.length === 0 && (
               <TableRow>
                 <TableCell colSpan={6}>
                   <EmptyState icon={<People />} title="No users found" description="Click 'Create User' to add a new user" />
@@ -349,38 +385,68 @@ export default function UsersPage() {
           <Stack spacing={2.5} sx={{ mt: 1 }}>
             <TextField
               label="Username"
-              value={createForm.username}
-              onChange={(e) => setCreateForm({ ...createForm, username: e.target.value })}
+              {...registerCreate('username')}
+              error={!!errorsCreate.username}
+              helperText={errorsCreate.username?.message || "At least 3 characters"}
               fullWidth
               required
-              helperText="At least 3 characters"
             />
             <TextField
               label="Password"
               type="password"
-              value={createForm.password}
-              onChange={(e) => setCreateForm({ ...createForm, password: e.target.value })}
+              {...registerCreate('password')}
+              error={!!errorsCreate.password}
+              helperText={errorsCreate.password?.message || "At least 6 characters"}
               fullWidth
               required
-              helperText="At least 6 characters"
             />
             <TextField
               label="Full Name"
-              value={createForm.fullName}
-              onChange={(e) => setCreateForm({ ...createForm, fullName: e.target.value })}
+              {...registerCreate('fullName')}
+              error={!!errorsCreate.fullName}
+              helperText={errorsCreate.fullName?.message}
               fullWidth
               required
             />
-            <FormControl fullWidth>
+            <FormControl fullWidth error={!!errorsCreate.role}>
               <InputLabel>Role</InputLabel>
               <Select
-                value={createForm.role}
+                value={watchCreate('role')}
                 label="Role"
-                onChange={(e) => setCreateForm({ ...createForm, role: e.target.value })}
+                onChange={(e) => setValueCreate('role', e.target.value, { shouldValidate: true })}
               >
-                <MenuItem value="USER">USER</MenuItem>
-                <MenuItem value="ADMIN">ADMIN</MenuItem>
+                <MenuItem value="ADMIN">
+                  <Box>
+                    <Typography variant="body2" fontWeight={600}>Admin</Typography>
+                    <Typography variant="caption" color="text.secondary">Full system access — manage all settings, users, and data</Typography>
+                  </Box>
+                </MenuItem>
+                <MenuItem value="STORE_MANAGER">
+                  <Box>
+                    <Typography variant="body2" fontWeight={600}>Store Manager</Typography>
+                    <Typography variant="caption" color="text.secondary">Manage store operations — receipts, issues, transfers, stock</Typography>
+                  </Box>
+                </MenuItem>
+                <MenuItem value="DEPARTMENT_MANAGER">
+                  <Box>
+                    <Typography variant="body2" fontWeight={600}>Department Manager</Typography>
+                    <Typography variant="caption" color="text.secondary">Manage department inventory — view stock, raise requisitions</Typography>
+                  </Box>
+                </MenuItem>
+                <MenuItem value="PURCHASE_MANAGER">
+                  <Box>
+                    <Typography variant="body2" fontWeight={600}>Purchase Manager</Typography>
+                    <Typography variant="caption" color="text.secondary">Handle purchases — vendors, purchase orders, GRN</Typography>
+                  </Box>
+                </MenuItem>
+                <MenuItem value="VIEWER">
+                  <Box>
+                    <Typography variant="body2" fontWeight={600}>Viewer</Typography>
+                    <Typography variant="caption" color="text.secondary">Read-only access — view reports and data, no edits</Typography>
+                  </Box>
+                </MenuItem>
               </Select>
+              {errorsCreate.role && <Typography variant="caption" color="error">{errorsCreate.role.message}</Typography>}
             </FormControl>
           </Stack>
         </DialogContent>
@@ -388,8 +454,8 @@ export default function UsersPage() {
           <Button onClick={() => setCreateDialogOpen(false)}>Cancel</Button>
           <Button
             variant="contained"
-            onClick={handleCreate}
-            disabled={!createForm.username || !createForm.password || !createForm.fullName}
+            onClick={handleSubmitCreate(handleCreateSubmit)}
+            disabled={!isValidCreate}
           >
             Create
           </Button>
@@ -403,28 +469,58 @@ export default function UsersPage() {
           <Stack spacing={2.5} sx={{ mt: 1 }}>
             <TextField
               label="Full Name"
-              value={editForm.fullName}
-              onChange={(e) => setEditForm({ ...editForm, fullName: e.target.value })}
+              {...registerEdit('fullName')}
+              error={!!errorsEdit.fullName}
+              helperText={errorsEdit.fullName?.message}
               fullWidth
               required
             />
-            <FormControl fullWidth>
+            <FormControl fullWidth error={!!errorsEdit.role}>
               <InputLabel>Role</InputLabel>
               <Select
-                value={editForm.role}
+                value={watchEdit('role')}
                 label="Role"
-                onChange={(e) => setEditForm({ ...editForm, role: e.target.value })}
+                onChange={(e) => setValueEdit('role', e.target.value, { shouldValidate: true })}
                 disabled={selectedUser?.id === currentUser?.id}
               >
-                <MenuItem value="USER">USER</MenuItem>
-                <MenuItem value="ADMIN">ADMIN</MenuItem>
+                <MenuItem value="ADMIN">
+                  <Box>
+                    <Typography variant="body2" fontWeight={600}>Admin</Typography>
+                    <Typography variant="caption" color="text.secondary">Full system access — manage all settings, users, and data</Typography>
+                  </Box>
+                </MenuItem>
+                <MenuItem value="STORE_MANAGER">
+                  <Box>
+                    <Typography variant="body2" fontWeight={600}>Store Manager</Typography>
+                    <Typography variant="caption" color="text.secondary">Manage store operations — receipts, issues, transfers, stock</Typography>
+                  </Box>
+                </MenuItem>
+                <MenuItem value="DEPARTMENT_MANAGER">
+                  <Box>
+                    <Typography variant="body2" fontWeight={600}>Department Manager</Typography>
+                    <Typography variant="caption" color="text.secondary">Manage department inventory — view stock, raise requisitions</Typography>
+                  </Box>
+                </MenuItem>
+                <MenuItem value="PURCHASE_MANAGER">
+                  <Box>
+                    <Typography variant="body2" fontWeight={600}>Purchase Manager</Typography>
+                    <Typography variant="caption" color="text.secondary">Handle purchases — vendors, purchase orders, GRN</Typography>
+                  </Box>
+                </MenuItem>
+                <MenuItem value="VIEWER">
+                  <Box>
+                    <Typography variant="body2" fontWeight={600}>Viewer</Typography>
+                    <Typography variant="caption" color="text.secondary">Read-only access — view reports and data, no edits</Typography>
+                  </Box>
+                </MenuItem>
               </Select>
+              {errorsEdit.role && <Typography variant="caption" color="error">{errorsEdit.role.message}</Typography>}
             </FormControl>
             <FormControlLabel
               control={
                 <Switch
-                  checked={editForm.isActive}
-                  onChange={(e) => setEditForm({ ...editForm, isActive: e.target.checked })}
+                  checked={watchEdit('isActive')}
+                  onChange={(e) => setValueEdit('isActive', e.target.checked, { shouldValidate: true })}
                   disabled={selectedUser?.id === currentUser?.id}
                 />
               }
@@ -434,7 +530,7 @@ export default function UsersPage() {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setEditDialogOpen(false)}>Cancel</Button>
-          <Button variant="contained" onClick={handleEdit}>Save</Button>
+          <Button variant="contained" onClick={handleSubmitEdit(handleEditSubmit)}>Save</Button>
         </DialogActions>
       </Dialog>
 

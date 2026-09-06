@@ -13,8 +13,9 @@ import {
   TableContainer, TableHead, TableRow, Tabs, Tab, Autocomplete, Chip, Card,
   CardContent, alpha, useTheme, IconButton, Tooltip, Divider, FormControl,
   InputLabel, Select, MenuItem, CircularProgress, Switch, FormControlLabel,
-  Collapse, Dialog, DialogTitle, DialogContent, DialogActions,
+  Collapse, List, ListItemButton, ListItemIcon, ListItemText,
 } from '@mui/material';
+import EnterpriseDialog from '../../components/EnterpriseDialog';
 import {
   Download as DownloadIcon, Assessment, FilterList, Inventory, LocalShipping,
   Business, Analytics, TrendingUp, TrendingDown, Warning, Search,
@@ -27,7 +28,7 @@ import DatePickerField from '../../components/DatePickerField';
 import { TableSkeleton } from '../../components/LoadingSkeleton';
 import { exportToExcel, ExportColumn, downloadBuffer } from '../../utils/importExport';
 import { formatDateDDMMYYYY } from '../../utils/dateUtils';
-import { safeNumber, safeFixed } from '../../utils/numberUtils';
+import { safeNumber, safeFixed, toNumber } from '../../utils/numberUtils';
 import toast from 'react-hot-toast';
 import {
   REPORT_SECTIONS, REPORT_NAMES, TX_TYPES, ADJUSTMENT_TYPES, AUDIT_ACTIONS,
@@ -49,12 +50,7 @@ export default function ReportsPage() {
   const theme = useTheme();
   const isDark = theme.palette.mode === 'dark';
 
-  const [activeReport, setActiveReport] = useState<string | null>(() => {
-    try { return localStorage.getItem('reports_activeReport') || null; } catch { return null; }
-  });
-  useEffect(() => {
-    try { if (activeReport) localStorage.setItem('reports_activeReport', activeReport); else localStorage.removeItem('reports_activeReport'); } catch {}
-  }, [activeReport]);
+  const [activeReport, setActiveReport] = useState<string | null>(null);
   const [startDate, setStartDate] = useState(() => { try { return localStorage.getItem('reports_startDate') || ''; } catch { return ''; } });
   const [endDate, setEndDate] = useState(() => { try { return localStorage.getItem('reports_endDate') || ''; } catch { return ''; } });
   const [selectedItemId, setSelectedItemId] = useState<number | null>(() => { try { const v = localStorage.getItem('reports_selectedItemId'); return v ? Number(v) : null; } catch { return null; } });
@@ -69,6 +65,7 @@ export default function ReportsPage() {
   const [selectedAuditTable, setSelectedAuditTable] = useState(() => { try { return localStorage.getItem('reports_selectedAuditTable') || ''; } catch { return ''; } });
   const [searchText, setSearchText] = useState(() => { try { return localStorage.getItem('reports_searchText') || ''; } catch { return ''; } });
   const [lowStockOnly, setLowStockOnly] = useState(() => { try { return localStorage.getItem('reports_lowStockOnly') === 'true'; } catch { return false; } });
+  const [selectedStoreId, setSelectedStoreId] = useState<number | null>(() => { try { const v = localStorage.getItem('reports_selectedStoreId'); return v ? Number(v) : null; } catch { return null; } });
   const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({});
   const [reportSearch, setReportSearch] = useState('');
   const [issueDrilldownItem, setIssueDrilldownItem] = useState<any>(null);
@@ -94,7 +91,8 @@ export default function ReportsPage() {
     save('reports_selectedAuditTable', selectedAuditTable);
     save('reports_searchText', searchText);
     save('reports_lowStockOnly', lowStockOnly);
-  }, [startDate, endDate, selectedItemId, selectedCategoryId, selectedDepartment, selectedVendor, selectedLocation, selectedTxType, selectedAdjustmentType, selectedStatus, selectedAuditAction, selectedAuditTable, searchText, lowStockOnly]);
+    save('reports_selectedStoreId', selectedStoreId ?? '');
+  }, [startDate, endDate, selectedItemId, selectedCategoryId, selectedDepartment, selectedVendor, selectedLocation, selectedTxType, selectedAdjustmentType, selectedStatus, selectedAuditAction, selectedAuditTable, searchText, lowStockOnly, selectedStoreId]);
 
   const [appliedFilters, setAppliedFilters] = useState(() => {
     const get = (k: string) => { try { return localStorage.getItem(k) || ''; } catch { return ''; } };
@@ -108,6 +106,7 @@ export default function ReportsPage() {
       selectedAdjustmentType: get('reports_selectedAdjustmentType'), selectedStatus: get('reports_selectedStatus'),
       selectedAuditAction: get('reports_selectedAuditAction'), selectedAuditTable: get('reports_selectedAuditTable'),
       searchText: get('reports_searchText'), lowStockOnly: getB('reports_lowStockOnly'),
+      selectedStoreId: getN('reports_selectedStoreId'),
     };
   });
 
@@ -117,6 +116,7 @@ export default function ReportsPage() {
       selectedDepartment, selectedVendor, selectedLocation,
       selectedTxType, selectedAdjustmentType, selectedStatus,
       selectedAuditAction, selectedAuditTable, searchText, lowStockOnly,
+      selectedStoreId,
     });
     setReportPage(0);
     setShowAll(false);
@@ -129,17 +129,18 @@ export default function ReportsPage() {
     setSelectedTxType(''); setSelectedAdjustmentType('');
     setSelectedStatus(''); setSelectedAuditAction('');
     setSelectedAuditTable(''); setSearchText('');
-    setLowStockOnly(false);
+    setLowStockOnly(false); setSelectedStoreId(null);
     setAppliedFilters({
       startDate: '', endDate: '', selectedItemId: null, selectedCategoryId: null,
       selectedDepartment: '', selectedVendor: '', selectedLocation: '',
       selectedTxType: '', selectedAdjustmentType: '', selectedStatus: '',
       selectedAuditAction: '', selectedAuditTable: '', searchText: '', lowStockOnly: false,
+      selectedStoreId: null,
     });
     setReportPage(0);
     setShowAll(false);
     // Clear persisted filters
-    ['reports_startDate','reports_endDate','reports_selectedItemId','reports_selectedCategoryId','reports_selectedDepartment','reports_selectedVendor','reports_selectedLocation','reports_selectedTxType','reports_selectedAdjustmentType','reports_selectedStatus','reports_selectedAuditAction','reports_selectedAuditTable','reports_searchText','reports_lowStockOnly'].forEach(k => { try { localStorage.removeItem(k); } catch {} });
+    ['reports_startDate','reports_endDate','reports_selectedItemId','reports_selectedCategoryId','reports_selectedDepartment','reports_selectedVendor','reports_selectedLocation','reports_selectedTxType','reports_selectedAdjustmentType','reports_selectedStatus','reports_selectedAuditAction','reports_selectedAuditTable','reports_searchText','reports_lowStockOnly','reports_selectedStoreId'].forEach(k => { try { localStorage.removeItem(k); } catch {} });
   };
 
   const debouncedSearch = useDebounce(appliedFilters.searchText, 300);
@@ -149,7 +150,7 @@ export default function ReportsPage() {
   useEffect(() => {
     setReportPage(0);
     setShowAll(false);
-  }, [debouncedSearch, debouncedStartDate, debouncedEndDate, appliedFilters.selectedCategoryId, appliedFilters.selectedDepartment, appliedFilters.selectedVendor, appliedFilters.selectedLocation, appliedFilters.selectedTxType, appliedFilters.selectedItemId]);
+  }, [debouncedSearch, debouncedStartDate, debouncedEndDate, appliedFilters.selectedCategoryId, appliedFilters.selectedDepartment, appliedFilters.selectedVendor, appliedFilters.selectedLocation, appliedFilters.selectedTxType, appliedFilters.selectedItemId, appliedFilters.selectedStoreId]);
 
   // Reset location when department changes (rooms belong to specific dharamshala)
   useEffect(() => {
@@ -175,9 +176,15 @@ export default function ReportsPage() {
     staleTime: 5 * 60 * 1000,
   });
 
+  const { data: stores } = useQuery({
+    queryKey: ['stores'],
+    queryFn: () => window.electronAPI.dbQuery('store', 'findMany', { where: { isActive: true }, orderBy: { name: 'asc' } }),
+    staleTime: 5 * 60 * 1000,
+  });
+
   const { data: vendors } = useQuery({
     queryKey: ['vendors'],
-    queryFn: () => window.electronAPI.dbQuery('vendor', 'findMany', { where: { isActive: true }, orderBy: { name: 'asc' } }),
+    queryFn: () => window.electronAPI.dbQuery('vendor', 'findMany', { where: { isActive: true }, orderBy: { vendorName: 'asc' } }),
     staleTime: 5 * 60 * 1000,
   });
 
@@ -189,18 +196,18 @@ export default function ReportsPage() {
         const dept = departments?.find((d: any) => d.id === Number(selectedDepartment));
         if (dept) {
           const parentLoc = await window.electronAPI.dbQuery('location', 'findFirst', {
-            where: { locationName: dept.name, locationType: { in: ['Dharamshala', 'Store', 'Department'] } },
+            where: { name: dept.name, locationType: { in: ['Dharamshala', 'Store', 'Department'] } },
           });
           if (parentLoc) {
             return window.electronAPI.dbQuery('location', 'findMany', {
               where: { parentId: parentLoc.id, isActive: true },
-              orderBy: { locationName: 'asc' },
+              orderBy: { name: 'asc' },
             });
           }
         }
         return [];
       }
-      return window.electronAPI.dbQuery('location', 'findMany', { where: { isActive: true }, orderBy: { locationName: 'asc' } });
+      return window.electronAPI.dbQuery('location', 'findMany', { where: { isActive: true }, orderBy: { name: 'asc' } });
     },
     enabled: !!departments,
     staleTime: 5 * 60 * 1000,
@@ -223,7 +230,7 @@ export default function ReportsPage() {
       });
       const parentNamesWithRooms = new Set(childRooms.map((r: any) => {
         const parent = parentLocations.find((p: any) => p.id === r.parentId);
-        return parent?.locationName;
+        return parent?.name;
       }).filter(Boolean));
       // Return only departments whose name matches a parent location that has rooms
       return departments?.filter((d: any) => parentNamesWithRooms.has(d.name)) || [];
@@ -260,7 +267,7 @@ export default function ReportsPage() {
       }
       return window.electronAPI.dbQuery('stockTransaction', 'findMany', {
         where,
-        include: { department: true, location: true },
+        include: { transaction: { include: { department: true, fromStore: true, toStore: true } } },
         orderBy: { transactionDate: 'desc' },
       });
     },
@@ -269,7 +276,7 @@ export default function ReportsPage() {
   });
 
   const reportQuery = useQuery({
-    queryKey: ['report', activeReport, company?.id, financialYear?.id, debouncedStartDate, debouncedEndDate, appliedFilters.selectedItemId, appliedFilters.selectedCategoryId, appliedFilters.selectedDepartment, appliedFilters.selectedVendor, appliedFilters.selectedLocation, appliedFilters.selectedTxType, appliedFilters.selectedAdjustmentType, appliedFilters.selectedStatus, appliedFilters.selectedAuditAction, appliedFilters.selectedAuditTable, appliedFilters.lowStockOnly, debouncedSearch],
+    queryKey: ['report', activeReport, company?.id, financialYear?.id, debouncedStartDate, debouncedEndDate, appliedFilters.selectedItemId, appliedFilters.selectedCategoryId, appliedFilters.selectedDepartment, appliedFilters.selectedVendor, appliedFilters.selectedLocation, appliedFilters.selectedTxType, appliedFilters.selectedAdjustmentType, appliedFilters.selectedStatus, appliedFilters.selectedAuditAction, appliedFilters.selectedAuditTable, appliedFilters.lowStockOnly, debouncedSearch, appliedFilters.selectedStoreId],
     queryFn: () => fetchReportData({
       activeReport: activeReport!,
       companyId: company!.id,
@@ -288,6 +295,7 @@ export default function ReportsPage() {
       selectedAuditTable: appliedFilters.selectedAuditTable,
       searchText: debouncedSearch,
       lowStockOnly: appliedFilters.lowStockOnly,
+      selectedStoreId: appliedFilters.selectedStoreId,
     }),
     enabled: !!company?.id && !!financialYear?.id && activeReport !== null,
     refetchOnMount: true,
@@ -308,15 +316,17 @@ export default function ReportsPage() {
     setSelectedAuditTable('');
     setSearchText('');
     setLowStockOnly(false);
+    setSelectedStoreId(null);
     setAppliedFilters({
       startDate: '', endDate: '', selectedItemId: null, selectedCategoryId: null,
       selectedDepartment: '', selectedVendor: '', selectedLocation: '',
       selectedTxType: '', selectedAdjustmentType: '', selectedStatus: '',
       selectedAuditAction: '', selectedAuditTable: '', searchText: '', lowStockOnly: false,
+      selectedStoreId: null,
     });
   };
 
-  const hasFilters = appliedFilters.startDate || appliedFilters.endDate || appliedFilters.selectedItemId || appliedFilters.selectedCategoryId || appliedFilters.selectedDepartment || appliedFilters.selectedVendor || appliedFilters.selectedLocation || appliedFilters.selectedTxType || appliedFilters.selectedAdjustmentType || appliedFilters.selectedStatus || appliedFilters.selectedAuditAction || appliedFilters.selectedAuditTable || appliedFilters.searchText || appliedFilters.lowStockOnly;
+  const hasFilters = appliedFilters.startDate || appliedFilters.endDate || appliedFilters.selectedItemId || appliedFilters.selectedCategoryId || appliedFilters.selectedDepartment || appliedFilters.selectedVendor || appliedFilters.selectedLocation || appliedFilters.selectedTxType || appliedFilters.selectedAdjustmentType || appliedFilters.selectedStatus || appliedFilters.selectedAuditAction || appliedFilters.selectedAuditTable || appliedFilters.searchText || appliedFilters.lowStockOnly || appliedFilters.selectedStoreId;
 
   const showDateFilter = ['receipt_register', 'issue_register', 'stock_ledger', 'item_history', 'movement_register', 'transfer_register', 'vendor_returns', 'vendor_purchase', 'damage_report', 'stock_adjustments', 'audit_log', 'dharamshala_items', 'purchase_history', 'central_store_summary', 'item_audit_ledger', 'damage_scrap_returns'].includes(activeReport || '');
   const showItemFilter = ['stock_ledger', 'stock_summary', 'low_stock', 'dead_stock', 'item_history', 'movement_register', 'department_wise', 'dharamshala_items', 'damage_report', 'stock_adjustments', 'stock_distribution', 'purchase_history', 'item_audit_ledger'].includes(activeReport || '');
@@ -330,6 +340,7 @@ export default function ReportsPage() {
   const showAuditFilters = ['audit_log'].includes(activeReport || '');
   const showSearchFilter = activeReport !== null;
   const showLowStockToggle = ['stock_summary'].includes(activeReport || '');
+  const showStoreFilter = (REPORT_FILTER_MAP[activeReport || ''] || []).includes('store');
 
   const formatCellValue = (row: any, key: string, value: any): string => {
     if (value === null || value === undefined) {
@@ -340,7 +351,6 @@ export default function ReportsPage() {
       if (value.itemName) return value.itemName;
       if (value.name) return value.name;
       if (value.challanNo) return value.challanNo;
-      if (value.locationName) return value.locationName;
       if (value.label) return value.label;
       if (value.fullName) return value.fullName;
       return '-';
@@ -361,7 +371,7 @@ export default function ReportsPage() {
     }
     if (key === 'vendorId' && typeof value === 'number') {
       const vendor = vendors?.find((v: any) => v.id === value);
-      return vendor ? vendor.name : `Vendor #${value}`;
+      return vendor ? vendor.vendorName : `Vendor #${value}`;
     }
     if (key === 'categoryId' && typeof value === 'number') {
       const cat = categories?.find((c: any) => c.id === value);
@@ -369,7 +379,15 @@ export default function ReportsPage() {
     }
     if (key === 'locationId' && typeof value === 'number') {
       const loc = locations?.find((l: any) => l.id === value);
-      return loc ? loc.locationName : `Loc #${value}`;
+      return loc ? loc.name : `Loc #${value}`;
+    }
+    if ((key === 'storeId' || key === 'fromStoreId' || key === 'toStoreId') && typeof value === 'number') {
+      const store = stores?.find((s: any) => s.id === value);
+      return store ? store.name : `Store #${value}`;
+    }
+    if (key === 'roomId' && typeof value === 'number') {
+      const loc = locations?.find((l: any) => l.id === value);
+      return loc ? loc.name : `Room #${value}`;
     }
     if ((key.toLowerCase().includes('date') || key.endsWith('At') || key.endsWith('_at')) && typeof value === 'string') {
       try {
@@ -377,11 +395,40 @@ export default function ReportsPage() {
         if (!isNaN(d.getTime())) return formatDateDDMMYYYY(d);
       } catch { }
     }
-    if (key === 'status') return String(value);
-    if (key === 'transactionType') {
+    if (key === 'status' || key === 'approvalStatus') return String(value);
+    if (key === 'tableName') {
+      const tableLabels: Record<string, string> = {
+        ReceiptChallan: 'Goods Receipt', IssueChallan: 'Store Issue',
+        TransferChallan: 'Store Transfer', StockTransaction: 'Stock Transaction',
+        DamageEntry: 'Damage Entry', StockAdjustment: 'Stock Adjustment',
+        VendorReturn: 'Vendor Return', Item: 'Item', User: 'User',
+        Company: 'Company', FinancialYear: 'Financial Year',
+        Asset: 'Asset', AssetInstallation: 'Asset Installation',
+        Requisition: 'Requisition', PurchaseOrder: 'Purchase Order',
+      };
+      return tableLabels[value] || String(value).replace(/([A-Z])/g, ' $1').trim();
+    }
+    if (key === 'movementType') {
+      const movementLabels: Record<string, string> = {
+        PURCHASE_RECEIPT: 'Receipt', ISSUE_OUT: 'Issue Out', TRANSFER_IN: 'Transfer In',
+        TRANSFER_OUT: 'Transfer Out', OPENING_BALANCE: 'Opening', ADJUSTMENT_IN: 'Adjustment +',
+        ADJUSTMENT_OUT: 'Adjustment -', DAMAGE_OUT: 'Damage Out', VENDOR_RETURN: 'Vendor Return',
+        INSTALL_IN: 'Install In', INSTALL_OUT: 'Install Out', REPAIR_IN: 'Repair In',
+        REPAIR_OUT: 'Repair Out', SCRAP: 'Scrap', SHIFT_IN: 'Shift In', SHIFT_OUT: 'Shift Out',
+      };
+      return movementLabels[value] || String(value).replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
+    }
+    if (key === 'transactionType' || key === 'voucherType') {
       const labels: Record<string, string> = {
-        RECEIPT: 'Receipt', ISSUE: 'Issue', TRANSFER_IN: 'Transfer In', TRANSFER_OUT: 'Transfer Out',
-        ADJUSTMENT_IN: 'Adj In', ADJUSTMENT_OUT: 'Adj Out', DAMAGE: 'Damage',
+        RECEIPT: 'Receipt', RC: 'Receipt', ISSUE: 'Issue', IS: 'Issue',
+        TRANSFER_IN: 'Transfer In', TC: 'Transfer',
+        ADJUSTMENT_IN: 'Adj In', ADJUSTMENT_OUT: 'Adj Out',
+        DAMAGE: 'Damage', DM: 'Damage', VR: 'Vendor Return',
+        OPENING_BALANCE: 'Opening', OB: 'Opening',
+        CARRY_FORWARD: 'Carry Forward', CF: 'Carry Forward',
+        REVERSAL: 'Reversal', RV: 'Reversal',
+        INSTALL: 'Install', UNINSTALL: 'Uninstall', UN: 'Uninstall',
+        SCRAP: 'Scrap', REPAIR: 'Repair',
       };
       return labels[value] || String(value);
     }
@@ -437,7 +484,7 @@ export default function ReportsPage() {
 
     if (activeReport === 'current_stock_custom') {
       const selectedCat = categories?.find((c: any) => c.id === selectedCategoryId);
-      const subTitle = selectedCat ? `${selectedCat.name} मैं चालू स्टॉक की रिपोर्ट` : 'सभी स्टोर मैं चालू स्टॉक की रिपोर्ट';
+      const subTitle = selectedCat ? `${selectedCat.name} - Current Stock Report` : 'All Stores - Current Stock Report';
       const grandTotal = data.reduce((sum: number, row: any) => sum + (row.total || 0), 0);
 
       return (
@@ -446,7 +493,7 @@ export default function ReportsPage() {
             <Button variant="outlined" size="small" startIcon={<DownloadIcon />} onClick={async () => {
               try {
                 const exportData = {
-                  title: 'दिगम्बर जैन अतिशय क्षेत्र श्री महावीर जी',
+                  title: 'Digambar Jain Atishay Kshetra Shri Mahaveer JI',
                   subTitle,
                   columns: [
                     { header: 'S.NO.', key: 'sNo' },
@@ -485,7 +532,7 @@ export default function ReportsPage() {
                   .subheader { text-align: center; font-weight: 600; font-size: 14px; margin-bottom: 10px; }
                   @media print { body { margin: 0; } }
                 </style></head><body>
-                <div class="header">दिगम्बर जैन अतिशय क्षेत्र श्री महावीर जी</div>
+                <div class="header">Digambar Jain Atishay Kshetra Shri Mahaveer JI</div>
                 <div class="subheader">${subTitle}</div>
                 ${tableHtml}
                 </body></html>
@@ -501,7 +548,7 @@ export default function ReportsPage() {
             {/* Header section matching the image */}
             <Box sx={{ borderBottom: '1px solid #000', p: 1, textAlign: 'center' }}>
               <Typography variant="h6" sx={{ fontWeight: 700, color: '#000', fontFamily: 'serif' }}>
-                दिगम्बर जैन अतिशय क्षेत्र श्री महावीर जी
+                Digambar Jain Atishay Kshetra Shri Mahaveer JI
               </Typography>
             </Box>
             <Box sx={{ borderBottom: '1px solid #000', p: 1, textAlign: 'center' }}>
@@ -634,8 +681,8 @@ export default function ReportsPage() {
                   @media print { body { margin: 10px; } }
                 </style></head><body>
                 <div class="print-header">
-                  <h2>दिगम्बर जैन अतिशय क्षेत्र श्री महावीर जी</h2>
-                  <p>स्टॉक वितरण रिपोर्ट</p>
+                  <h2>Digambar Jain Atishay Kshetra Shri Mahaveer JI</h2>
+                  <p>Stock Distribution Report</p>
                 </div>
                 ${tableHtml}
                 </body></html>
@@ -650,12 +697,12 @@ export default function ReportsPage() {
           <Paper sx={{ width: '100%', overflow: 'hidden', border: '1px solid #000', borderRadius: 0 }} elevation={0}>
             <Box sx={{ borderBottom: '1px solid #000', p: 1, textAlign: 'center' }}>
               <Typography variant="h6" sx={{ fontWeight: 700, color: '#000', fontFamily: 'serif' }}>
-                दिगम्बर जैन अतिशय क्षेत्र श्री महावीर जी
+                Digambar Jain Atishay Kshetra Shri Mahaveer JI
               </Typography>
             </Box>
             <Box sx={{ borderBottom: '1px solid #000', p: 1, textAlign: 'center' }}>
               <Typography variant="subtitle1" sx={{ fontWeight: 600, color: '#000' }}>
-                स्टॉक वितरण रिपोर्ट
+                Stock Distribution Report
               </Typography>
             </Box>
 
@@ -709,7 +756,7 @@ export default function ReportsPage() {
 
     if (activeReport === 'department_stock_status') {
       const selectedDept = departments?.find((d: any) => d.id === Number(selectedDepartment));
-      const subTitle = selectedDept ? `Department ${selectedDept.name} में चालू स्टॉक की रिपोर्ट` : 'Department में चालू स्टॉक की रिपोर्ट';
+      const subTitle = selectedDept ? `Department ${selectedDept.name} - Current Stock Report` : 'Department - Current Stock Report';
 
       return (
         <Box>
@@ -721,7 +768,7 @@ export default function ReportsPage() {
                 <Button variant="outlined" size="small" startIcon={<DownloadIcon />} onClick={async () => {
                   try {
                     const exportData = {
-                      title: 'दिगम्बर जैन अतिशय क्षेत्र श्री महावीर जी',
+                      title: 'Digambar Jain Atishay Kshetra Shri Mahaveer JI',
                       subTitle,
                       columns: [
                         { header: 'S.NO.', key: 'sNo' },
@@ -757,7 +804,7 @@ export default function ReportsPage() {
                       .subheader { text-align: center; font-weight: 600; font-size: 14px; margin-bottom: 10px; }
                       @media print { body { margin: 0; } }
                     </style></head><body>
-                    <div class="header">दिगम्बर जैन अतिशय क्षेत्र श्री महावीर जी</div>
+                    <div class="header">Digambar Jain Atishay Kshetra Shri Mahaveer JI</div>
                     <div class="subheader">${subTitle}</div>
                     ${tableHtml}
                     </body></html>
@@ -772,7 +819,7 @@ export default function ReportsPage() {
               <Paper sx={{ width: '100%', overflow: 'hidden', border: '1px solid #000', borderRadius: 0 }} elevation={0}>
                 <Box sx={{ borderBottom: '1px solid #000', p: 1, textAlign: 'center' }}>
                   <Typography variant="h6" sx={{ fontWeight: 700, color: '#000', fontFamily: 'serif' }}>
-                    दिगम्बर जैन अतिशय क्षेत्र श्री महावीर जी
+                    Digambar Jain Atishay Kshetra Shri Mahaveer JI
                   </Typography>
                 </Box>
                 <Box sx={{ borderBottom: '1px solid #000', p: 1, textAlign: 'center' }}>
@@ -869,12 +916,12 @@ export default function ReportsPage() {
           <Paper sx={{ width: '100%', overflow: 'hidden', border: '1px solid #000', borderRadius: 0 }} elevation={0}>
             <Box sx={{ borderBottom: '1px solid #000', p: 1, textAlign: 'center' }}>
               <Typography variant="h6" sx={{ fontWeight: 700, color: '#000', fontFamily: 'serif' }}>
-                दिगम्बर जैन अतिशय क्षेत्र श्री महावीर जी
+                Digambar Jain Atishay Kshetra Shri Mahaveer JI
               </Typography>
             </Box>
             <Box sx={{ borderBottom: '1px solid #000', p: 1, textAlign: 'center' }}>
               <Typography variant="subtitle1" sx={{ fontWeight: 600, color: '#000' }}>
-                खरीद इतिहास रिपोर्ट
+                Purchase History Report
               </Typography>
             </Box>
 
@@ -1027,7 +1074,7 @@ export default function ReportsPage() {
                     continue;
                   }
                   if (typeof val === 'object' && !Array.isArray(val)) {
-                    flatRow[key] = val.itemName || val.name || val.challanNo || val.locationName || val.label || val.fullName || '';
+                    flatRow[key] = val.itemName || val.name || val.challanNo || val.label || val.fullName || '';
                   } else if (Array.isArray(val)) {
                     const names = val.map((v: any) => v?.item?.itemName || v?.itemName || v?.name || v?.challanNo || null).filter(Boolean);
                     flatRow[key] = names.length > 0 ? names.join(', ') : `${val.length} items`;
@@ -1055,7 +1102,7 @@ export default function ReportsPage() {
                   const val = row[key];
                   let display = '';
                   if (val === null || val === undefined) display = (key === 'vendor' && row.sourceName) ? row.sourceName : '';
-                  else if (typeof val === 'object' && !Array.isArray(val)) display = val.itemName || val.name || val.challanNo || val.locationName || val.label || val.fullName || '';
+                  else if (typeof val === 'object' && !Array.isArray(val)) display = val.itemName || val.name || val.challanNo || val.label || val.fullName || '';
                   else if (Array.isArray(val)) {
                     const names = val.map((v: any) => v?.item?.itemName || v?.itemName || v?.name || v?.challanNo || null).filter(Boolean);
                     display = names.length > 0 ? names.join(', ') : `${val.length} items`;
@@ -1080,7 +1127,7 @@ export default function ReportsPage() {
                   @media print { body { margin: 10px; } }
                 </style></head><body>
                 <div class="print-header">
-                  <h2>दिगम्बर जैन अतिशय क्षेत्र श्री महावीर जी</h2>
+                  <h2>Digambar Jain Atishay Kshetra Shri Mahaveer JI</h2>
                   <p>${reportName}</p>
                 </div>
                 ${tableHtml}
@@ -1159,117 +1206,125 @@ export default function ReportsPage() {
     );
   };
 
+  const [selectedSection, setSelectedSection] = useState<string | null>(null);
+
   return (
-    <Box>
-      <Box sx={{ mb: 2.5 }}>
-        <Typography variant="h4" sx={{ fontFamily: '"Poppins", sans-serif', fontWeight: 700, color: 'text.primary', mb: 0.25 }}>
-          Report Center
-        </Typography>
-        <Typography variant="body2" color="text.secondary">
-          Inventory analytics, reports, and data exports
-        </Typography>
-      </Box>
-
-      {activeReport === null && (
-        <Box>
-          {/* Universal Search Bar */}
-          <Paper sx={{ p: 1.5, mb: 2, borderRadius: '12px', border: '1px solid', borderColor: 'divider' }}>
-            <TextField
-              fullWidth
-              size="small"
-              placeholder="Search reports... (e.g. 'stock', 'vendor', 'audit')"
-              value={reportSearch}
-              onChange={(e) => setReportSearch(e.target.value)}
-              InputProps={{
-                startAdornment: <Search sx={{ fontSize: 18, mr: 0.75, color: 'text.secondary' }} />,
-                endAdornment: reportSearch ? (
-                  <IconButton size="small" onClick={() => setReportSearch('')}>
-                    <Clear sx={{ fontSize: 16 }} />
-                  </IconButton>
-                ) : null,
-                sx: { borderRadius: '10px', fontSize: '0.8125rem' },
-              }}
-            />
-          </Paper>
-
-          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'repeat(2, 1fr)' }, gap: 1.5 }}>
-            {REPORT_SECTIONS.map((section) => {
-              const isCollapsed = collapsedSections[section.title] || false;
-              const filteredReports = reportSearch
-                ? section.reports.filter((r) =>
-                  r.name.toLowerCase().includes(reportSearch.toLowerCase()) ||
-                  r.description.toLowerCase().includes(reportSearch.toLowerCase()) ||
-                  r.key.toLowerCase().includes(reportSearch.toLowerCase())
-                )
-                : section.reports;
-              if (reportSearch && filteredReports.length === 0) return null;
-              return (
-                <Card key={section.title} sx={{ transition: 'all 200ms ease-out', '&:hover': { transform: 'translateY(-2px)', boxShadow: '0 8px 24px -4px rgba(0,0,0,0.1)' } }}>
-                  <CardContent sx={{ p: '14px 16px !important' }}>
-                    <Stack
-                      direction="row"
-                      alignItems="center"
-                      spacing={1.5}
-                      mb={isCollapsed ? 0 : 1.5}
-                      sx={{ cursor: 'pointer' }}
-                      onClick={() => setCollapsedSections((prev) => ({ ...prev, [section.title]: !prev[section.title] }))}
-                    >
-                      <Box sx={{
-                        width: 32, height: 32, borderRadius: 1,
-                        backgroundColor: alpha(section.color, 0.08),
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        color: section.color,
-                      }}>
-                        {section.iconKey === 'LocalShipping' ? <LocalShipping sx={{ fontSize: 18 }} /> :
-                         section.iconKey === 'Business' ? <Business sx={{ fontSize: 18 }} /> :
-                         section.iconKey === 'Inventory' ? <Inventory sx={{ fontSize: 18 }} /> :
-                         <Analytics sx={{ fontSize: 18 }} />}
-                      </Box>
-                      <Typography variant="h6" sx={{ fontFamily: '"Poppins", sans-serif', fontWeight: 600, fontSize: '0.875rem', flex: 1 }}>
-                        {section.title}
-                      </Typography>
-                      <Chip label={filteredReports.length} size="small" sx={{ height: 20, fontSize: '0.7rem' }} />
-                      {isCollapsed ? <ExpandLess sx={{ fontSize: 18, color: 'text.secondary' }} /> : <ExpandMore sx={{ fontSize: 18, color: 'text.secondary' }} />}
-                    </Stack>
-                    <Collapse in={!isCollapsed}>
-                      <Stack spacing={0.75} sx={{ mt: 1.5 }}>
-                        {filteredReports.map((report) => (
-                          <Box
-                            key={report.key}
-                            onClick={() => { setActiveReport(report.key); clearFilters(); }}
-                            sx={{
-                              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                              p: 1, borderRadius: '8px', cursor: 'pointer', border: '1px solid',
-                              borderColor: 'divider', transition: 'all 150ms ease-out',
-                              '&:hover': { borderColor: section.color, backgroundColor: alpha(section.color, 0.04), transform: 'translateX(2px)' },
-                            }}
-                          >
-                            <Box>
-                              <Typography variant="body2" fontWeight={600} sx={{ fontSize: '0.8125rem' }}>{report.name}</Typography>
-                              <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.6875rem' }}>{report.description}</Typography>
-                            </Box>
-                          </Box>
-                        ))}
-                      </Stack>
-                    </Collapse>
-                  </CardContent>
-                </Card>
-              );
-            })}
-          </Box>
+    <Box sx={{ display: 'flex', gap: 2, minHeight: 500 }}>
+      {/* Left Sidebar */}
+      <Paper
+        elevation={0}
+        sx={{
+          width: 240,
+          flexShrink: 0,
+          borderRadius: '12px',
+          border: '1px solid',
+          borderColor: 'divider',
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+        }}
+      >
+        {/* Search */}
+        <Box sx={{ p: 1.25, borderBottom: '1px solid', borderColor: 'divider' }}>
+          <TextField
+            fullWidth
+            size="small"
+            placeholder="Search reports..."
+            value={reportSearch}
+            onChange={(e) => { setReportSearch(e.target.value); setSelectedSection(null); }}
+            InputProps={{
+              startAdornment: <Search sx={{ fontSize: 16, mr: 0.5, color: 'text.secondary' }} />,
+              endAdornment: reportSearch ? (
+                <IconButton size="small" onClick={() => setReportSearch('')} sx={{ p: 0.25 }}>
+                  <Clear sx={{ fontSize: 14 }} />
+                </IconButton>
+              ) : null,
+              sx: { borderRadius: '8px', fontSize: '0.8125rem', height: 34 },
+            }}
+          />
         </Box>
-      )}
 
-      {activeReport !== null && (
-        <Box>
-          <Stack direction="row" alignItems="center" spacing={1.5} mb={2}>
-            <Button size="small" onClick={() => setActiveReport(null)} startIcon={<ArrowBack sx={{ fontSize: 16 }} />} sx={{ minWidth: 0 }}>
-              Back
-            </Button>
-            <Typography variant="h5" sx={{ fontFamily: '"Poppins", sans-serif', fontWeight: 600, fontSize: '1rem' }}>
-              {REPORT_NAMES[activeReport]}
+        {/* Categories */}
+        <Box sx={{ flex: 1, overflow: 'auto', py: 0.5 }}>
+          {REPORT_SECTIONS.map((section) => {
+            const filtered = reportSearch
+              ? section.reports.filter((r) =>
+                  r.name.toLowerCase().includes(reportSearch.toLowerCase()) ||
+                  r.description.toLowerCase().includes(reportSearch.toLowerCase()))
+              : section.reports;
+            if (reportSearch && filtered.length === 0) return null;
+
+            const isExpanded = selectedSection === section.title || reportSearch.length > 0;
+
+            return (
+              <Box key={section.title}>
+                <ListItemButton
+                  selected={selectedSection === section.title && !reportSearch}
+                  onClick={() => { setSelectedSection(selectedSection === section.title ? null : section.title); setReportSearch(''); }}
+                  sx={{ py: 0.75, px: 1.5, borderRadius: 0 }}
+                >
+                  <Box sx={{
+                    width: 6, height: 6, borderRadius: '50%',
+                    backgroundColor: section.color, mr: 1, flexShrink: 0,
+                  }} />
+                  <ListItemText
+                    primary={section.title}
+                    primaryTypographyProps={{ fontSize: '0.8125rem', fontWeight: 500 }}
+                  />
+                  <Chip label={filtered.length} size="small" sx={{ height: 18, fontSize: '0.625rem' }} />
+                </ListItemButton>
+
+                {isExpanded && (
+                  <Box sx={{ pb: 0.5 }}>
+                    {filtered.map((report) => (
+                      <ListItemButton
+                        key={report.key}
+                        selected={activeReport === report.key}
+                        onClick={() => { setActiveReport(report.key); clearFilters(); setSelectedSection(null); setReportSearch(''); }}
+                        sx={{ py: 0.5, pl: 4, pr: 1.5, borderRadius: 0 }}
+                      >
+                        <ListItemText
+                          primary={report.name}
+                          primaryTypographyProps={{
+                            fontSize: '0.75rem',
+                            fontWeight: activeReport === report.key ? 600 : 400,
+                            color: activeReport === report.key ? 'primary.main' : 'text.secondary',
+                          }}
+                        />
+                      </ListItemButton>
+                    ))}
+                  </Box>
+                )}
+              </Box>
+            );
+          })}
+        </Box>
+      </Paper>
+
+      {/* Main Content */}
+      <Box sx={{ flex: 1, minWidth: 0 }}>
+        {activeReport === null ? (
+          /* Welcome */
+          <Box sx={{ textAlign: 'center', py: 6 }}>
+            <Assessment sx={{ fontSize: 48, color: 'text.disabled', mb: 2 }} />
+            <Typography variant="h6" sx={{ fontWeight: 600, mb: 0.5 }}>
+              Report Center
             </Typography>
-          </Stack>
+            <Typography variant="body2" color="text.secondary">
+              Select a report from the sidebar to get started
+            </Typography>
+          </Box>
+        ) : (
+          /* Report Content */
+          <Box>
+            <Stack direction="row" alignItems="center" spacing={1.5} mb={2}>
+              <Button size="small" onClick={() => setActiveReport(null)} startIcon={<ArrowBack sx={{ fontSize: 16 }} />} sx={{ minWidth: 0 }}>
+                Back
+              </Button>
+              <Typography variant="h6" sx={{ fontWeight: 600, fontSize: '0.9375rem' }}>
+                {REPORT_NAMES[activeReport]}
+              </Typography>
+            </Stack>
 
           <Paper sx={{ p: 1.5, mb: 2, borderRadius: '12px', border: '1px solid', borderColor: 'divider' }}>
             <Stack direction="row" alignItems="center" justifyContent="space-between" mb={1.5}>
@@ -1300,6 +1355,16 @@ export default function ReportsPage() {
                   onChange={(_, v: any) => { const val = v?.id || null; setSelectedItemId(val); setAppliedFilters(prev => ({ ...prev, selectedItemId: val })); setReportPage(0); }}
                   renderInput={(params) => <TextField {...params} label="Item" size="small" />}
                   sx={{ minWidth: 250 }}
+                  slotProps={{
+                    popper: {
+                      placement: 'bottom-start',
+                      sx: { zIndex: 1050 },
+                      modifiers: [{ name: 'preventOverflow', options: { boundary: 'viewport' } }],
+                    },
+                    paper: {
+                      sx: { maxHeight: 300, overflow: 'auto' },
+                    },
+                  }}
                 />
               )}
               {showCategoryFilter && (
@@ -1320,12 +1385,21 @@ export default function ReportsPage() {
                   </Select>
                 </FormControl>
               )}
+              {showStoreFilter && (
+                <FormControl size="small" sx={{ minWidth: 150 }}>
+                  <InputLabel>Store</InputLabel>
+                  <Select value={selectedStoreId || ''} label="Store" onChange={(e) => { const val = e.target.value ? Number(e.target.value) : null; setSelectedStoreId(val); setAppliedFilters(prev => ({ ...prev, selectedStoreId: val })); setReportPage(0); }}>
+                    <MenuItem value="">All Stores</MenuItem>
+                    {stores?.map((s: any) => <MenuItem key={s.id} value={s.id}>{s.name}</MenuItem>)}
+                  </Select>
+                </FormControl>
+              )}
               {showVendorFilter && (
                 <FormControl size="small" sx={{ minWidth: 150 }}>
                   <InputLabel>Vendor</InputLabel>
                   <Select value={selectedVendor} label="Vendor" onChange={(e) => setSelectedVendor(e.target.value)}>
                     <MenuItem value="">All</MenuItem>
-                    {vendors?.map((v: any) => <MenuItem key={v.id} value={v.id}>{v.name}</MenuItem>)}
+                    {vendors?.map((v: any) => <MenuItem key={v.id} value={v.id}>{v.vendorName}</MenuItem>)}
                   </Select>
                 </FormControl>
               )}
@@ -1334,7 +1408,7 @@ export default function ReportsPage() {
                   <InputLabel>Location</InputLabel>
                   <Select value={selectedLocation} label="Location" onChange={(e) => setSelectedLocation(e.target.value)}>
                     <MenuItem value="">All</MenuItem>
-                    {locations?.map((l: any) => <MenuItem key={l.id} value={l.id}>{l.locationName}</MenuItem>)}
+                    {locations?.map((l: any) => <MenuItem key={l.id} value={l.id}>{l.name}</MenuItem>)}
                   </Select>
                 </FormControl>
               )}
@@ -1373,7 +1447,7 @@ export default function ReportsPage() {
                     <InputLabel>Action</InputLabel>
                     <Select value={selectedAuditAction} label="Action" onChange={(e) => setSelectedAuditAction(e.target.value)}>
                       <MenuItem value="">All</MenuItem>
-                      {AUDIT_ACTIONS.map((a) => <MenuItem key={a} value={a}>{a}</MenuItem>)}
+                      {AUDIT_ACTIONS.map((a) => <MenuItem key={a.value} value={a.value}>{a.label}</MenuItem>)}
                     </Select>
                   </FormControl>
                   <FormControl size="small" sx={{ minWidth: 130 }}>
@@ -1381,9 +1455,9 @@ export default function ReportsPage() {
                     <Select value={selectedAuditTable} label="Table" onChange={(e) => setSelectedAuditTable(e.target.value)}>
                       <MenuItem value="">All</MenuItem>
                       <MenuItem value="Item">Item</MenuItem>
-                      <MenuItem value="ReceiptChallan">Receipt Challan</MenuItem>
-                      <MenuItem value="IssueChallan">Issue Challan</MenuItem>
-                      <MenuItem value="TransferChallan">Transfer Challan</MenuItem>
+                      <MenuItem value="ReceiptChallan">Goods Receipt</MenuItem>
+                      <MenuItem value="IssueChallan">Store Issue</MenuItem>
+                      <MenuItem value="TransferChallan">Store Transfer</MenuItem>
                       <MenuItem value="StockTransaction">Stock Transaction</MenuItem>
                       <MenuItem value="Company">Company</MenuItem>
                       <MenuItem value="Department">Department</MenuItem>
@@ -1416,166 +1490,144 @@ export default function ReportsPage() {
             </Box>
           </Paper>
         </Box>
-      )}
+        )}
+      </Box>
 
       {/* Issue Drill-down Dialog */}
-      <Dialog
+      <EnterpriseDialog
         open={!!issueDrilldownItem}
         onClose={() => setIssueDrilldownItem(null)}
+        title={`Issue Breakdown — ${issueDrilldownItem?.itemName || ''}`}
+        subtitle={`Where ${issueDrilldownItem?.totalIssued || 0} units were issued`}
+        icon={<LocalShipping />}
         maxWidth="md"
-        fullWidth
+        actions={<Button onClick={() => setIssueDrilldownItem(null)}>Close</Button>}
       >
-        <DialogTitle>
-          <Stack direction="row" alignItems="center" spacing={1}>
-            <LocalShipping sx={{ color: 'primary.main' }} />
-            <Typography variant="h6" fontWeight={700}>
-              Issue Breakdown — {issueDrilldownItem?.itemName}
-            </Typography>
-          </Stack>
-          <Typography variant="body2" color="text.secondary" mt={0.5}>
-            Where {issueDrilldownItem?.totalIssued || 0} units were issued
+        {breakdownLoading ? (
+          <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
+            <CircularProgress />
+          </Box>
+        ) : !issueBreakdown || issueBreakdown.length === 0 ? (
+          <Typography color="text.secondary" textAlign="center" py={4}>
+            No issue data found for this item.
           </Typography>
-        </DialogTitle>
-        <DialogContent dividers>
-          {breakdownLoading ? (
-            <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
-              <CircularProgress />
-            </Box>
-          ) : !issueBreakdown || issueBreakdown.length === 0 ? (
-            <Typography color="text.secondary" textAlign="center" py={4}>
-              No issue data found for this item.
-            </Typography>
-          ) : (
-            <TableContainer>
-              <Table size="small">
-                <TableHead>
-                  <TableRow>
-                    <TableCell sx={{ fontWeight: 700 }}>Department</TableCell>
-                    <TableCell sx={{ fontWeight: 700 }}>Location</TableCell>
-                    <TableCell sx={{ fontWeight: 700 }} align="right">Qty Issued</TableCell>
-                    <TableCell sx={{ fontWeight: 700 }} align="right">% of Total</TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {issueBreakdown.map((row: any, idx: number) => {
-                    const total = issueDrilldownItem?.totalIssued || 1;
-                    const pct = ((row.totalQty / total) * 100).toFixed(1);
-                    return (
-                      <TableRow key={idx} hover>
-                        <TableCell>{row.departmentName}</TableCell>
-                        <TableCell>{row.locationName}</TableCell>
-                        <TableCell align="right" sx={{ fontWeight: 600, color: 'error.main' }}>
-                          {row.totalQty}
-                        </TableCell>
-                        <TableCell align="right">
-                          <Chip label={`${pct}%`} size="small" color={Number(pct) > 20 ? 'error' : 'default'} />
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-            </TableContainer>
-          )}
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setIssueDrilldownItem(null)}>Close</Button>
-        </DialogActions>
-      </Dialog>
+        ) : (
+          <TableContainer>
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  <TableCell sx={{ fontWeight: 700 }}>Department</TableCell>
+                  <TableCell sx={{ fontWeight: 700 }}>Location</TableCell>
+                  <TableCell sx={{ fontWeight: 700 }} align="right">Qty Issued</TableCell>
+                  <TableCell sx={{ fontWeight: 700 }} align="right">% of Total</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {issueBreakdown.map((row: any, idx: number) => {
+                  const total = issueDrilldownItem?.totalIssued || 1;
+                  const pct = ((row.totalQty / total) * 100).toFixed(1);
+                  return (
+                    <TableRow key={idx} hover>
+                      <TableCell>{row.departmentName}</TableCell>
+                      <TableCell>{row.locationName}</TableCell>
+                      <TableCell align="right" sx={{ fontWeight: 600, color: 'error.main' }}>
+                        {row.totalQty}
+                      </TableCell>
+                      <TableCell align="right">
+                        <Chip label={`${pct}%`} size="small" color={Number(pct) > 20 ? 'error' : 'default'} />
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        )}
+      </EnterpriseDialog>
 
       {/* Stock Transaction Details Dialog */}
-      <Dialog
+      <EnterpriseDialog
         open={!!stockDetailItem}
         onClose={() => setStockDetailItem(null)}
+        title={`Stock Details — ${stockDetailItem?.itemName || ''}`}
+        subtitle={`Total Received: ${stockDetailItem?.totalIn || 0} | Balance: ${stockDetailItem?.stockQty || 0}`}
+        icon={<Inventory />}
         maxWidth="lg"
-        fullWidth
+        actions={<Button onClick={() => setStockDetailItem(null)}>Close</Button>}
       >
-        <DialogTitle>
-          <Stack direction="row" alignItems="center" spacing={1}>
-            <Inventory sx={{ color: 'primary.main' }} />
-            <Typography variant="h6" fontWeight={700}>
-              Stock Details — {stockDetailItem?.itemName}
-            </Typography>
-          </Stack>
-          <Typography variant="body2" color="text.secondary" mt={0.5}>
-            Total Received: {stockDetailItem?.totalIn || 0} | Balance: {stockDetailItem?.stockQty || 0}
+        {stockTxLoading ? (
+          <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
+            <CircularProgress />
+          </Box>
+        ) : !stockTransactions || stockTransactions.length === 0 ? (
+          <Typography color="text.secondary" textAlign="center" py={4}>
+            No transactions found for this item.
           </Typography>
-        </DialogTitle>
-        <DialogContent dividers>
-          {stockTxLoading ? (
-            <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
-              <CircularProgress />
-            </Box>
-          ) : !stockTransactions || stockTransactions.length === 0 ? (
-            <Typography color="text.secondary" textAlign="center" py={4}>
-              No transactions found for this item.
-            </Typography>
-          ) : (
-            <TableContainer>
-              <Table size="small">
-                <TableHead>
-                  <TableRow>
-                    <TableCell sx={{ fontWeight: 700 }}>Date</TableCell>
-                    <TableCell sx={{ fontWeight: 700 }}>Type</TableCell>
-                    <TableCell sx={{ fontWeight: 700 }}>Reference No</TableCell>
-                    <TableCell sx={{ fontWeight: 700 }} align="right">Qty In</TableCell>
-                    <TableCell sx={{ fontWeight: 700 }} align="right">Qty Out</TableCell>
-                    <TableCell sx={{ fontWeight: 700 }} align="right">Rate</TableCell>
-                    <TableCell sx={{ fontWeight: 700 }} align="right">Balance</TableCell>
-                    <TableCell sx={{ fontWeight: 700 }}>Department</TableCell>
-                    <TableCell sx={{ fontWeight: 700 }}>Location</TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {(() => {
-                    const sorted = [...stockTransactions].sort((a: any, b: any) => new Date(a.transactionDate).getTime() - new Date(b.transactionDate).getTime());
-                    let runningBalance = 0;
-                    return sorted.map((txn: any, idx: number) => {
-                      runningBalance += Number(txn.quantityIn || 0) - Number(txn.quantityOut || 0);
-                      return (
-                        <TableRow key={idx} hover>
-                          <TableCell>{formatDateDDMMYYYY(txn.transactionDate)}</TableCell>
-                          <TableCell>
-                            <Chip
-                              label={txn.transactionType}
-                              size="small"
-                              color={
-                                ['RECEIPT', 'PURCHASE', 'OPENING_STOCK', 'TRANSFER_IN', 'ADJUSTMENT_IN'].includes(txn.transactionType)
-                                  ? 'success'
-                                  : ['ISSUE', 'TRANSFER_OUT', 'ADJUSTMENT_OUT', 'DAMAGE'].includes(txn.transactionType)
-                                    ? 'error'
-                                    : 'default'
-                              }
-                            />
-                          </TableCell>
-                          <TableCell>{txn.referenceNo || '-'}</TableCell>
-                          <TableCell align="right" sx={{ color: Number(txn.quantityIn) > 0 ? 'success.main' : 'text.secondary' }}>
-                            {Number(txn.quantityIn || 0) > 0 ? txn.quantityIn : '-'}
-                          </TableCell>
-                          <TableCell align="right" sx={{ color: Number(txn.quantityOut) > 0 ? 'error.main' : 'text.secondary' }}>
-                            {Number(txn.quantityOut || 0) > 0 ? txn.quantityOut : '-'}
-                          </TableCell>
-                          <TableCell align="right" sx={{ fontFamily: '"JetBrains Mono", monospace', fontSize: '0.8rem' }}>
-                            {Number(txn.rate) > 0 ? `₹${Number(txn.rate).toFixed(2)}` : '-'}
-                          </TableCell>
-                          <TableCell align="right" sx={{ fontWeight: 600, color: runningBalance > 0 ? 'primary.main' : runningBalance < 0 ? 'error.main' : 'text.secondary' }}>
-                            {runningBalance}
-                          </TableCell>
-                          <TableCell>{txn.department?.name || '-'}</TableCell>
-                          <TableCell>{txn.location ? `${txn.location.locationType} - ${txn.location.locationName}` : '-'}</TableCell>
-                        </TableRow>
-                      );
-                    });
-                  })()}
-                </TableBody>
-              </Table>
-            </TableContainer>
-          )}
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setStockDetailItem(null)}>Close</Button>
-        </DialogActions>
-      </Dialog>
+        ) : (
+          <TableContainer>
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  <TableCell sx={{ fontWeight: 700 }}>Date</TableCell>
+                  <TableCell sx={{ fontWeight: 700 }}>Type</TableCell>
+                  <TableCell sx={{ fontWeight: 700 }}>Reference No</TableCell>
+                  <TableCell sx={{ fontWeight: 700 }} align="right">Qty In</TableCell>
+                  <TableCell sx={{ fontWeight: 700 }} align="right">Qty Out</TableCell>
+                  <TableCell sx={{ fontWeight: 700 }} align="right">Rate</TableCell>
+                  <TableCell sx={{ fontWeight: 700 }} align="right">Balance</TableCell>
+                  <TableCell sx={{ fontWeight: 700 }}>Department</TableCell>
+                  <TableCell sx={{ fontWeight: 700 }}>Location</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {(() => {
+                  const sorted = [...stockTransactions].sort((a: any, b: any) => {
+                    const da = new Date(a.date || 0); const db = new Date(b.date || 0);
+                    return (isNaN(da.getTime()) ? 0 : da.getTime()) - (isNaN(db.getTime()) ? 0 : db.getTime());
+                  });
+                  let runningBalance = 0;
+                  return sorted.map((txn: any, idx: number) => {
+                    runningBalance += toNumber(txn.quantityIn) - toNumber(txn.quantityOut);
+                    return (
+                      <TableRow key={idx} hover>
+                        <TableCell>{formatDateDDMMYYYY(txn.date)}</TableCell>
+                        <TableCell>
+                          <Chip
+                            label={txn.transactionType}
+                            size="small"
+                            color={
+                              ['RECEIPT', 'PURCHASE', 'OPENING_BALANCE', 'TRANSFER_IN', 'ADJUSTMENT_IN'].includes(txn.transactionType)
+                                ? 'success'
+                                : ['ISSUE', 'TRANSFER_OUT', 'ADJUSTMENT_OUT', 'DAMAGE'].includes(txn.transactionType)
+                                  ? 'error'
+                                  : 'default'
+                            }
+                          />
+                        </TableCell>
+                        <TableCell>{txn.referenceNo || '-'}</TableCell>
+                        <TableCell align="right" sx={{ color: toNumber(txn.quantityIn) > 0 ? 'success.main' : 'text.secondary' }}>
+                          {toNumber(txn.quantityIn) > 0 ? toNumber(txn.quantityIn) : '-'}
+                        </TableCell>
+                        <TableCell align="right" sx={{ color: toNumber(txn.quantityOut) > 0 ? 'error.main' : 'text.secondary' }}>
+                          {toNumber(txn.quantityOut) > 0 ? toNumber(txn.quantityOut) : '-'}
+                        </TableCell>
+                        <TableCell align="right" sx={{ fontFamily: '"JetBrains Mono", monospace', fontSize: '0.8rem' }}>
+                          {toNumber(txn.rate) > 0 ? `₹${toNumber(txn.rate).toFixed(2)}` : '-'}
+                        </TableCell>
+                        <TableCell align="right" sx={{ fontWeight: 600, color: runningBalance > 0 ? 'primary.main' : runningBalance < 0 ? 'error.main' : 'text.secondary' }}>
+                          {runningBalance}
+                        </TableCell>
+                        <TableCell>{txn.transaction?.department?.name || '-'}</TableCell>
+                        <TableCell>{txn.transaction?.fromStore?.name || txn.transaction?.toStore?.name || '-'}</TableCell>
+                      </TableRow>
+                    );
+                  });
+                })()}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        )}
+      </EnterpriseDialog>
     </Box>
   );
 }

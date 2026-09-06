@@ -27,21 +27,18 @@ interface CommandItem {
 
 const commands: CommandItem[] = [
   { id: 'dashboard', label: 'Dashboard', description: 'Overview & analytics', icon: <Dashboard sx={{ fontSize: 18 }} />, path: '/', section: 'Navigation', keywords: ['home', 'overview', 'main'] },
-  { id: 'receipt-challan', label: 'Receipt Challans', description: 'Inward material tracking', icon: <Receipt sx={{ fontSize: 18 }} />, path: '/inventory/receipt-challan', section: 'Navigation', keywords: ['receive', 'vendor', 'inward', 'aamad'] },
-  { id: 'issue-challan', label: 'Issue Challans', description: 'Outward material tracking', icon: <LocalShipping sx={{ fontSize: 18 }} />, path: '/inventory/issue-challan', section: 'Navigation', keywords: ['issue', 'department', 'outward', 'kharch'] },
-  { id: 'transfer-challan', label: 'Transfer Challans', description: 'Inter-department transfers', icon: <Transform sx={{ fontSize: 18 }} />, path: '/inventory/transfer-challan', section: 'Navigation', keywords: ['transfer', 'move'] },
+  { id: 'issue-challan', label: 'Store Issue', description: 'Outward material tracking', icon: <LocalShipping sx={{ fontSize: 18 }} />, path: '/inventory/issue-challan', section: 'Navigation', keywords: ['issue', 'store', 'outward'] },
+  { id: 'transfer-challan', label: 'Store Transfer', description: 'Inter-store transfers', icon: <Transform sx={{ fontSize: 18 }} />, path: '/inventory/transfer-challan', section: 'Navigation', keywords: ['transfer', 'move', 'store'] },
   { id: 'vendor-return', label: 'Vendor Returns', description: 'Return to vendor', icon: <Assignment sx={{ fontSize: 18 }} />, path: '/inventory/vendor-return', section: 'Navigation', keywords: ['return', 'vendor'] },
   { id: 'stock-adjustment', label: 'Stock Adjustments', description: 'Correct stock levels', icon: <Warning sx={{ fontSize: 18 }} />, path: '/inventory/stock-adjustment', section: 'Navigation', keywords: ['adjust', 'correction'] },
   { id: 'stock-ledger', label: 'Stock Ledger', description: 'Physical stock count', icon: <Assessment sx={{ fontSize: 18 }} />, path: '/inventory/stock-ledger', section: 'Navigation', keywords: ['verify', 'count', 'ledger'] },
   { id: 'damage-entry', label: 'Damage Entry', description: 'Record damaged items', icon: <Warning sx={{ fontSize: 18 }} />, path: '/inventory/damage-entry', section: 'Navigation', keywords: ['damage', 'broken'] },
   { id: 'item-history', label: 'Item History', description: 'Movement timeline', icon: <History sx={{ fontSize: 18 }} />, path: '/inventory/item-history', section: 'Navigation', keywords: ['history', 'log', 'tracking'] },
   { id: 'items-master', label: 'Items', description: 'Item master data', icon: <Inventory sx={{ fontSize: 18 }} />, path: '/masters/items', section: 'Masters', keywords: ['item', 'product', 'material'], permissionKey: 'manage_masters' },
-  { id: 'categories', label: 'Categories', description: 'Item categories', icon: <Inventory sx={{ fontSize: 18 }} />, path: '/masters/categories', section: 'Masters', keywords: ['category', 'group'], permissionKey: 'manage_masters' },
   { id: 'units', label: 'Units', description: 'Measurement units', icon: <Inventory sx={{ fontSize: 18 }} />, path: '/masters/units', section: 'Masters', keywords: ['unit', 'measurement'], permissionKey: 'manage_masters' },
-  { id: 'vendors', label: 'Vendors', description: 'Supplier management', icon: <LocalShipping sx={{ fontSize: 18 }} />, path: '/masters/vendors', section: 'Masters', keywords: ['vendor', 'supplier'], permissionKey: 'manage_masters' },
   { id: 'departments', label: 'Departments', description: 'Department management', icon: <Business sx={{ fontSize: 18 }} />, path: '/masters/departments', section: 'Masters', keywords: ['department', 'team', 'store'], permissionKey: 'manage_masters' },
   { id: 'locations', label: 'Locations', description: 'Room & location tracking', icon: <Warehouse sx={{ fontSize: 18 }} />, path: '/masters/locations', section: 'Masters', keywords: ['location', 'place', 'room'], permissionKey: 'manage_masters' },
-  { id: 'room-details', label: 'Room Details', description: 'Facility & asset tracking', icon: <Hotel sx={{ fontSize: 18 }} />, path: '/facilities/room-details', section: 'Facilities', keywords: ['room', 'facility', 'dharmshala'] },
+  { id: 'room-details', label: 'Room Details', description: 'Dharamshala Room Inventory', icon: <Hotel sx={{ fontSize: 18 }} />, path: '/facilities/room-details', section: 'Facilities', keywords: ['room', 'facility', 'dharmshala', 'inventory'] },
   { id: 'reports', label: 'Reports', description: 'Analytics & export', icon: <Assessment sx={{ fontSize: 18 }} />, path: '/reports', section: 'System', keywords: ['report', 'analysis', 'export'] },
   { id: 'financial-year', label: 'Financial Years', description: 'Manage FY periods', icon: <CalendarMonth sx={{ fontSize: 18 }} />, path: '/financial-year', section: 'System', keywords: ['financial', 'year', 'fy'], permissionKey: 'manage_financial_year' },
   { id: 'companies', label: 'Companies', description: 'Multi-company management', icon: <Business sx={{ fontSize: 18 }} />, path: '/companies', section: 'System', keywords: ['company', 'business'], permissionKey: 'manage_company' },
@@ -50,9 +47,9 @@ const commands: CommandItem[] = [
 ];
 
 const quickActions: CommandItem[] = [
-  { id: 'new-receipt', label: 'New Receipt Challan', description: 'Create inward entry', icon: <Add sx={{ fontSize: 18 }} />, path: '/inventory/receipt-challan/new', section: 'Quick Actions', keywords: ['create', 'new', 'receipt'], shortcut: '⌘N' },
-  { id: 'new-issue', label: 'New Issue Challan', description: 'Create outward entry', icon: <Add sx={{ fontSize: 18 }} />, path: '/inventory/issue-challan/new', section: 'Quick Actions', keywords: ['create', 'new', 'issue'], shortcut: '⌘⇧I' },
-  { id: 'new-transfer', label: 'New Transfer Challan', description: 'Create transfer entry', icon: <Add sx={{ fontSize: 18 }} />, path: '/inventory/transfer-challan/new', section: 'Quick Actions', keywords: ['create', 'new', 'transfer'], shortcut: '⌘⇧T' },
+  { id: 'new-receipt', label: 'New Goods Receipt', description: 'Create inward entry', icon: <Add sx={{ fontSize: 18 }} />, path: '/procurement/grn/new', section: 'Quick Actions', keywords: ['create', 'new', 'receipt'], shortcut: '⌘N' },
+  { id: 'new-issue', label: 'New Store Issue', description: 'Create outward entry', icon: <Add sx={{ fontSize: 18 }} />, path: '/inventory/issue-challan/new', section: 'Quick Actions', keywords: ['create', 'new', 'issue'], shortcut: '⌘⇧I' },
+  { id: 'new-transfer', label: 'New Store Transfer', description: 'Create transfer entry', icon: <Add sx={{ fontSize: 18 }} />, path: '/inventory/transfer-challan/new', section: 'Quick Actions', keywords: ['create', 'new', 'transfer'], shortcut: '⌘⇧T' },
 ];
 
 interface CommandPaletteProps {
@@ -206,6 +203,7 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
             fullWidth
             variant="standard"
             placeholder="Search pages, actions, masters..."
+            aria-label="Search pages, actions, and masters"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={handleKeyDown}

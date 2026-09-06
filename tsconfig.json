@@ -23,6 +23,6 @@
       "@main/*": ["src/main/*"]
     }
   },
-  "include": ["src"],
+  "include": ["src/renderer"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

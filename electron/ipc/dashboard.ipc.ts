@@ -1,175 +1,92 @@
 import { ipcMain } from 'electron';
-import { getPrismaClient } from '../../src/main/database/prisma.client';
+import { DashboardService } from '../../src/main/services/dashboard.service';
+import { ReportService } from '../../src/main/services/reportService.service';
+import { GlobalSearchService } from '../../src/main/services/globalSearch.service';
+import { ExportService } from '../../src/main/services/export.service';
 import { requireAuth } from './helpers';
 
-function settle<T>(result: PromiseSettledResult<T>, fallback: T, label: string): { data: T; warning?: string } {
-  if (result.status === 'fulfilled') return { data: result.value };
-  console.error(`[Dashboard] ${label} failed:`, result.reason?.message || result.reason);
-  return { data: fallback, warning: `${label}: ${result.reason?.message || 'unknown error'}` };
-}
-
-export function registerDashboardIpc() {
-  const prisma = getPrismaClient();
-
-  ipcMain.handle('dashboard:getData', async (_event, companyId: number, financialYearId: number) => {
-    requireAuth();
-    const warnings: string[] = [];
-
-    const results = await Promise.allSettled([
-      prisma.stockTransaction.findMany({                           // 0: stock
-        where: { companyId, financialYearId },
-        select: {
-          itemId: true, quantityIn: true, quantityOut: true, rate: true,
-          transactionDate: true, item: { include: { category: true } }, department: true,
-        },
-      }),
-      prisma.item.findMany({                                       // 1: items
-        where: { isActive: true },
-        include: { unit: true, category: true },
-        take: 2000,
-      }),
-      prisma.receiptChallan.findMany({                             // 2: receipts
-        where: { companyId, financialYearId, status: 'Posted' },
-        include: { items: { include: { item: true } } },
-        take: 2000,
-      }),
-      prisma.issueChallan.findMany({                               // 3: issues
-        where: { companyId, financialYearId, status: 'Posted' },
-        include: { items: { include: { item: true } } },
-        take: 2000,
-      }),
-      prisma.receiptChallan.findMany({                             // 4: pendingReceipts
-        where: { companyId, financialYearId, status: 'Draft' }, take: 500,
-      }),
-      prisma.issueChallan.findMany({                               // 5: pendingIssues
-        where: { companyId, financialYearId, status: 'Draft' }, take: 500,
-      }),
-      prisma.transferChallan.findMany({                            // 6: pendingTransfers
-        where: { companyId, financialYearId, status: 'Draft' }, take: 500,
-      }),
-      prisma.stockTransaction.findMany({                           // 7: recentTransactions
-        where: { companyId, financialYearId },
-        include: { item: true, department: true },
-        orderBy: { transactionDate: 'desc' },
-        take: 50,
-      }),
-    ]);
-
-    const stock = settle(results[0], [], 'Stock transactions').data;
-    const items = settle(results[1], [], 'Items').data;
-    const receipts = settle(results[2], [], 'Receipt challans').data;
-    const issues = settle(results[3], [], 'Issue challans').data;
-    const pendingReceipts = settle(results[4], [], 'Pending receipts').data;
-    const pendingIssues = settle(results[5], [], 'Pending issues').data;
-    const pendingTransfers = settle(results[6], [], 'Pending transfers').data;
-    const recentTransactions = settle(results[7], [], 'Recent transactions').data;
-
-    for (const r of results) {
-      if (r.status === 'rejected') warnings.push(r.reason?.message || 'Query failed');
+const ser = (r: any) => JSON.parse(JSON.stringify(r, (_k, v) => {
+  if (typeof v === 'bigint') return v.toString();
+  if (v != null && typeof v === 'object') {
+    if (typeof v.toJSON === 'function') {
+      const json = v.toJSON();
+      if (typeof json !== 'object' || json === null) return json;
     }
+    if ('s' in v && 'e' in v && 'd' in v) return Number(String(v));
+  }
+  return v;
+}));
 
-    const totalItems = items.length;
-    const totalReceiptQty = receipts.length;
-    const totalIssueQty = issues.length;
-    const stockValue = stock.reduce((sum, t) => sum + (Number(t.quantityIn || 0) * Number(t.rate || 0)) - (Number(t.quantityOut || 0) * Number(t.rate || 0)), 0);
-    const availableQty = stock.reduce((sum, t) => sum + Number(t.quantityIn || 0) - Number(t.quantityOut || 0), 0);
-    const pendingDrafts = pendingReceipts.length + pendingIssues.length + pendingTransfers.length;
-
-    const monthlyData: Record<string, { inbound: number; outbound: number; inboundValue: number; outboundValue: number; month: string }> = {};
-    stock.forEach((t) => {
-      const d = new Date(t.transactionDate);
-      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-      if (!monthlyData[key]) {
-        const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-        monthlyData[key] = { inbound: 0, outbound: 0, inboundValue: 0, outboundValue: 0, month: monthNames[d.getMonth()] };
-      }
-      const qtyIn = Number(t.quantityIn || 0);
-      const qtyOut = Number(t.quantityOut || 0);
-      const rate = Number(t.rate || 0);
-      monthlyData[key].inbound += qtyIn;
-      monthlyData[key].outbound += qtyOut;
-      monthlyData[key].inboundValue += qtyIn * rate;
-      monthlyData[key].outboundValue += qtyOut * rate;
-    });
-    const monthlyMovement = Object.entries(monthlyData).slice(-12).map(([, v]) => v);
-
-    const stockTrend: { month: string; value: number }[] = [];
-    let cumulative = 0;
-    monthlyMovement.forEach((m) => {
-      cumulative += m.inboundValue - m.outboundValue;
-      stockTrend.push({ month: m.month, value: Math.max(0, cumulative) });
-    });
-
-    const itemConsumption: Record<string, { name: string; consumed: number }> = {};
-    stock.forEach((t) => {
-      if (Number(t.quantityOut || 0) > 0) {
-        const name = t.item?.itemName || `Item #${t.itemId}`;
-        if (!itemConsumption[name]) itemConsumption[name] = { name: name.slice(0, 25), consumed: 0 };
-        itemConsumption[name].consumed += Number(t.quantityOut || 0);
-      }
-    });
-    const topConsumed = Object.values(itemConsumption).sort((a, b) => b.consumed - a.consumed).slice(0, 10);
-
-    const deptConsumption: Record<string, { name: string; consumed: number }> = {};
-    stock.forEach((t) => {
-      if (Number(t.quantityOut || 0) > 0) {
-        const name = t.department?.name || 'General';
-        if (!deptConsumption[name]) deptConsumption[name] = { name, consumed: 0 };
-        deptConsumption[name].consumed += Number(t.quantityOut || 0);
-      }
-    });
-    const deptWise = Object.values(deptConsumption).slice(0, 8);
-
-    const catDistribution: Record<string, { name: string; value: number }> = {};
-    stock.forEach((t) => {
-      const name = t.item?.category?.name || 'Uncategorized';
-      if (!catDistribution[name]) catDistribution[name] = { name, value: 0 };
-      catDistribution[name].value += Number(t.quantityIn || 0) - Number(t.quantityOut || 0);
-    });
-    const categoryData = Object.values(catDistribution).filter((c) => c.value > 0).slice(0, 6);
-
-    const receiptVsIssue = monthlyMovement.map((m) => ({ month: m.month, receipts: m.inbound, issues: m.outbound }));
-
-    const lowStockItems = items
-      .filter((i) => Number(i.minimumStockLevel) > 0)
-      .map((i) => {
-        const bal = stock.reduce((sum, t) => {
-          if (t.itemId === i.id) return sum + Number(t.quantityIn || 0) - Number(t.quantityOut || 0);
-          return sum;
-        }, 0);
-        return {
-          id: i.id,
-          itemName: i.itemName,
-          itemCode: i.itemCode,
-          minimumStockLevel: Number(i.minimumStockLevel),
-          categoryName: i.category?.name || '',
-          unitName: i.unit?.name || '',
-          currentBalance: bal,
-          deficit: Number(i.minimumStockLevel) - bal,
-        };
-      })
-      .filter((i) => i.currentBalance < i.minimumStockLevel)
-      .sort((a, b) => a.deficit - b.deficit)
-      .slice(0, 6);
-
-    const serializedRecent = recentTransactions.map((t) => ({
-      id: t.id,
-      transactionType: t.transactionType,
-      quantityIn: Number(t.quantityIn || 0),
-      quantityOut: Number(t.quantityOut || 0),
-      rate: Number(t.rate || 0),
-      balanceQty: Number(t.balanceQty || 0),
-      transactionDate: t.transactionDate instanceof Date ? t.transactionDate.toISOString() : String(t.transactionDate),
-      itemName: t.item?.itemName || '',
-      departmentName: t.department?.name || '',
-    }));
-
-    return {
-      totalItems, lowStockItems: lowStockItems.length, lowStockItemsDetail: lowStockItems,
-      totalReceiptQty, totalIssueQty, stockValue, availableQty,
-      pendingDrafts, recentTransactions: serializedRecent, monthlyMovement, stockTrend,
-      topConsumed, deptWise, categoryData, receiptVsIssue,
-      warnings: warnings.length > 0 ? warnings : undefined,
-    };
+export function registerDashboardIPC() {
+  // Legacy dashboard:getData handler (used by Dashboard page)
+  ipcMain.handle('dashboard:getData', async (_e, companyId: number, financialYearId: number) => {
+    requireAuth();
+    return ser(await DashboardService.getSuperAdminDashboard({ companyId, financialYearId }));
   });
+
+  // ===== DASHBOARDS =====
+  ipcMain.handle('dash:superAdmin', async (_e, filter) => { requireAuth(); return ser(await DashboardService.getSuperAdminDashboard(filter)); });
+  ipcMain.handle('dash:storeManager', async (_e, filter) => { requireAuth(); return ser(await DashboardService.getStoreManagerDashboard(filter)); });
+  ipcMain.handle('dash:maintenance', async (_e, filter) => { requireAuth(); return ser(await DashboardService.getMaintenanceDashboard(filter)); });
+  ipcMain.handle('dash:purchase', async (_e, filter) => { requireAuth(); return ser(await DashboardService.getPurchaseDashboard(filter)); });
+  ipcMain.handle('dash:kpis', async (_e, filter) => { requireAuth(); return ser(await DashboardService.getKPIs(filter)); });
+  ipcMain.handle('dash:monthlyTrend', async (_e, companyId, months) => { requireAuth(); return ser(await DashboardService.getMonthlyTrend(companyId, months)); });
+  ipcMain.handle('dash:lowStock', async (_e, companyId, storeId) => { requireAuth(); return ser(await DashboardService.getLowStockItems(companyId, storeId)); });
+  ipcMain.handle('dash:outOfStock', async (_e, companyId) => { requireAuth(); return ser(await DashboardService.getOutOfStockItems(companyId)); });
+  ipcMain.handle('dash:topProblematic', async (_e, companyId, limit) => { requireAuth(); return ser(await DashboardService.getTopProblematicAssets(companyId, limit)); });
+  ipcMain.handle('dash:engineerWorkload', async (_e, companyId) => { requireAuth(); return ser(await DashboardService.getEngineerWorkload(companyId)); });
+  ipcMain.handle('dash:deptConsumption', async (_e, companyId, fyId) => { requireAuth(); return ser(await DashboardService.getDepartmentConsumption(companyId, fyId)); });
+
+  // ===== REPORTS =====
+  ipcMain.handle('rpt:overallStock', async (_e, filter) => { requireAuth(); return ser(await ReportService.getOverallStock(filter)); });
+  ipcMain.handle('rpt:storeStock', async (_e, filter) => { requireAuth(); return ser(await ReportService.getStoreWiseStock(filter)); });
+  ipcMain.handle('rpt:deptStock', async (_e, filter) => { requireAuth(); return ser(await ReportService.getDepartmentWiseStock(filter)); });
+  ipcMain.handle('rpt:itemStock', async (_e, filter) => { requireAuth(); return ser(await ReportService.getItemWiseStock(filter)); });
+  ipcMain.handle('rpt:categoryStock', async (_e, filter) => { requireAuth(); return ser(await ReportService.getCategoryWiseStock(filter)); });
+
+  ipcMain.handle('rpt:receipt', async (_e, filter) => { requireAuth(); return ser(await ReportService.getReceiptReport(filter)); });
+  ipcMain.handle('rpt:issue', async (_e, filter) => { requireAuth(); return ser(await ReportService.getIssueReport(filter)); });
+  ipcMain.handle('rpt:transfer', async (_e, filter) => { requireAuth(); return ser(await ReportService.getTransferReport(filter)); });
+  ipcMain.handle('rpt:installation', async (_e, filter) => { requireAuth(); return ser(await ReportService.getInstallationReport(filter)); });
+  ipcMain.handle('rpt:uninstallation', async (_e, filter) => { requireAuth(); return ser(await ReportService.getUninstallationReport(filter)); });
+  ipcMain.handle('rpt:damage', async (_e, filter) => { requireAuth(); return ser(await ReportService.getDamageReport(filter)); });
+  ipcMain.handle('rpt:repair', async (_e, filter) => { requireAuth(); return ser(await ReportService.getRepairReport(filter)); });
+  ipcMain.handle('rpt:replacement', async (_e, filter) => { requireAuth(); return ser(await ReportService.getReplacementReport(filter)); });
+  ipcMain.handle('rpt:return', async (_e, filter) => { requireAuth(); return ser(await ReportService.getReturnReport(filter)); });
+  ipcMain.handle('rpt:adjustment', async (_e, filter) => { requireAuth(); return ser(await ReportService.getAdjustmentReport(filter)); });
+
+  ipcMain.handle('rpt:completeLedger', async (_e, filter) => { requireAuth(); return ser(await ReportService.getCompleteLedger(filter)); });
+  ipcMain.handle('rpt:itemLedger', async (_e, filter) => { requireAuth(); return ser(await ReportService.getItemLedger(filter)); });
+  ipcMain.handle('rpt:storeLedger', async (_e, filter) => { requireAuth(); return ser(await ReportService.getStoreLedger(filter)); });
+  ipcMain.handle('rpt:deptLedger', async (_e, filter) => { requireAuth(); return ser(await ReportService.getDepartmentLedger(filter)); });
+
+  ipcMain.handle('rpt:assetRegister', async (_e, filter) => { requireAuth(); return ser(await ReportService.getAssetRegister(filter)); });
+  ipcMain.handle('rpt:installedAssets', async (_e, filter) => { requireAuth(); return ser(await ReportService.getInstalledAssets(filter)); });
+  ipcMain.handle('rpt:assetHealth', async (_e, filter) => { requireAuth(); return ser(await ReportService.getAssetHealthReport(filter)); });
+  ipcMain.handle('rpt:warrantyExpiry', async (_e, filter) => { requireAuth(); return ser(await ReportService.getWarrantyExpiryReport(filter)); });
+  ipcMain.handle('rpt:amcExpiry', async (_e, filter) => { requireAuth(); return ser(await ReportService.getAMCExpiryReport(filter)); });
+
+  ipcMain.handle('rpt:purchaseRegister', async (_e, filter) => { requireAuth(); return ser(await ReportService.getPurchaseRegister(filter)); });
+  ipcMain.handle('rpt:grnRegister', async (_e, filter) => { requireAuth(); return ser(await ReportService.getGRNRegister(filter)); });
+  ipcMain.handle('rpt:vendorPerformance', async (_e, filter) => { requireAuth(); return ser(await ReportService.getVendorPerformance(filter)); });
+
+  ipcMain.handle('rpt:serviceRegister', async (_e, filter) => { requireAuth(); return ser(await ReportService.getServiceRegister(filter)); });
+  ipcMain.handle('rpt:woRegister', async (_e, filter) => { requireAuth(); return ser(await ReportService.getWorkOrderRegister(filter)); });
+  ipcMain.handle('rpt:downtime', async (_e, filter) => { requireAuth(); return ser(await ReportService.getDowntimeReport(filter)); });
+  ipcMain.handle('rpt:repairCost', async (_e, filter) => { requireAuth(); return ser(await ReportService.getRepairCostReport(filter)); });
+
+  ipcMain.handle('rpt:inventoryValuation', async (_e, filter) => { requireAuth(); return ser(await ReportService.getInventoryValuation(filter)); });
+  ipcMain.handle('rpt:transactionSummary', async (_e, filter) => { requireAuth(); return ser(await ReportService.getTransactionSummary(filter)); });
+
+  ipcMain.handle('rpt:importHistory', async (_e, filter) => { requireAuth(); return ser(await ReportService.getImportHistory(filter)); });
+
+  // ===== SEARCH =====
+  ipcMain.handle('global:search', async (_e, companyId, query, limit) => { requireAuth(); return GlobalSearchService.search(companyId, query, limit); });
+
+  // ===== EXPORT =====
+  ipcMain.handle('export:excel', async (_e, data, columns, filename) => { requireAuth(); return ExportService.exportToExcel(data, columns, filename); });
+  ipcMain.handle('export:csv', async (_e, data, columns, filename) => { requireAuth(); return ExportService.exportToCSV(data, columns, filename); });
+  ipcMain.handle('export:json', async (_e, data, filename) => { requireAuth(); return ExportService.exportToJSON(data, filename); });
+  ipcMain.handle('export:list', async () => { requireAuth(); return ExportService.listExports(); });
+  ipcMain.handle('export:delete', async (_e, filename) => { requireAuth(); return ExportService.deleteExport(filename); });
 }

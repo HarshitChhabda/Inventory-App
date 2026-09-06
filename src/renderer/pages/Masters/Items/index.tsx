@@ -1,10 +1,13 @@
 import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
 import {
   Box, Typography, Button, Table, TableBody, TableCell, TableContainer,
-  TableHead, TableRow, Paper, IconButton, Dialog, DialogTitle, DialogContent,
-  DialogActions, TextField, Chip, TablePagination, Stack, Tooltip, alpha, useTheme,
+  TableHead, TableRow, Paper, IconButton, TextField, Chip, TablePagination, Stack, Tooltip, alpha, useTheme,
   FormControl, InputLabel, Select, MenuItem, TableSortLabel, CircularProgress,
-  Card, CardContent, Checkbox, Collapse, Badge, LinearProgress, Divider,
+  Card, CardContent, Checkbox, Collapse, Badge, LinearProgress, Divider, Autocomplete,
+  Dialog, DialogTitle, DialogContent, DialogActions,
 } from '@mui/material';
 import {
   Add, Edit, Delete, Search, Inventory2, FilterList, ViewModule, ViewList,
@@ -13,37 +16,79 @@ import {
 } from '@mui/icons-material';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useCompany } from '../../../context/CompanyContext';
+import { useListState } from '../../../hooks/useListState';
 import PageHeader from '../../../components/PageHeader';
 import EmptyState from '../../../components/EmptyState';
+import ConfirmDialog from '../../../components/ConfirmDialog';
 import ImportExportButtons from '../../../components/ImportExportButtons';
+import EnterpriseDialog from '../../../components/EnterpriseDialog';
+import FormSection from '../../../components/FormSection';
 import toast from 'react-hot-toast';
+import { getErrorMessage } from '../../../utils/errorUtils';
+import { GuideButton } from '../../../components/GuideSystem';
+import ImportProgressDialog, { getInitialProgress, ImportProgress } from '../../../components/ImportProgressDialog';
+
+const itemSchema = z.object({
+  itemCode: z.string().min(1, 'Item code is required'),
+  itemName: z.string().min(1, 'Item name is required'),
+  unitId: z.number().min(1, 'Unit is required'),
+  minimumStockLevel: z.number().min(0),
+});
+type ItemFormData = z.infer<typeof itemSchema>;
 
 export default function ItemsPage() {
   const { company } = useCompany();
   const queryClient = useQueryClient();
   const theme = useTheme();
   const isDark = theme.palette.mode === 'dark';
-  const [page, setPage] = useState(0);
-  const [rowsPerPage, setRowsPerPage] = useState(50);
-  const [search, setSearch] = useState('');
-  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const {
+    state: ls, setSearch: setLsSearch, setPage: setLsPage, setPageSize: setLsPageSize,
+    setSort: setLsSort, setFilter: setLsFilter,
+  } = useListState('items', { pageSize: 50, sortBy: 'itemName', sortOrder: 'asc' as const });
+
+  const [page, setPage] = useState(ls.page);
+  const [rowsPerPage, setRowsPerPage] = useState(ls.pageSize);
+  const [search, setSearchLocal] = useState(ls.search);
+  const [debouncedSearch, setDebouncedSearch] = useState(ls.search);
   const debounceTimer = useRef<ReturnType<typeof setTimeout>>();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<any>(null);
-  const [formData, setFormData] = useState({
-    itemCode: '', itemName: '', categoryId: 0, unitId: 0, minimumStockLevel: 0,
+  const { register, handleSubmit, reset, watch, setValue, formState: { errors, isValid } } = useForm<ItemFormData>({
+    resolver: zodResolver(itemSchema),
+    mode: 'onChange',
+    defaultValues: { itemCode: '', itemName: '', unitId: 0, minimumStockLevel: 0 },
   });
+  const [newUnitName, setNewUnitName] = useState('');
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deletingItem, setDeletingItem] = useState<any>(null);
-  const [filterCategory, setFilterCategory] = useState<number | ''>('');
-  const [sortBy, setSortBy] = useState('itemName');
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
+  const [filterStore, setFilterStoreLocal] = useState<number | ''>((ls.filters.store as any) || '');
+  const [sortBy, setSortByLocal] = useState(ls.sortBy || 'itemName');
+  const [sortOrder, setSortOrderLocal] = useState<'asc' | 'desc'>(ls.sortOrder || 'asc');
   const [viewMode, setViewMode] = useState<'table' | 'card'>('table');
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [showFilters, setShowFilters] = useState(false);
   const [favorites, setFavorites] = useState<Set<number>>(() => {
     try { return new Set(JSON.parse(localStorage.getItem('favoriteItems') || '[]')); } catch { return new Set(); }
   });
+
+  const handleSearchChange = (v: string) => {
+    setSearchLocal(v);
+    setLsSearch(v);
+  };
+  const handleFilterStoreChange = (v: number | '') => {
+    setFilterStoreLocal(v);
+    setLsFilter('store', String(v));
+  };
+  const handlePageChange = (_: any, newPage: number) => {
+    setPage(newPage);
+    setLsPage(newPage);
+  };
+  const handleRowsPerPageChange = (e: any) => {
+    const val = parseInt(e.target.value, 10);
+    setRowsPerPage(val);
+    setLsPageSize(val);
+    setPage(0);
+  };
 
   useEffect(() => {
     clearTimeout(debounceTimer.current);
@@ -55,7 +100,7 @@ export default function ItemsPage() {
   }, [search]);
 
   const { data, isLoading } = useQuery({
-    queryKey: ['items', company?.id, page, rowsPerPage, debouncedSearch, filterCategory, sortBy, sortOrder],
+    queryKey: ['items', company?.id, page, rowsPerPage, debouncedSearch, filterStore, sortBy, sortOrder],
     queryFn: async () => {
       const api = window.electronAPI;
       const where: any = {};
@@ -65,7 +110,7 @@ export default function ItemsPage() {
           { itemCode: { contains: debouncedSearch } },
         ];
       }
-      if (filterCategory !== '') where.categoryId = filterCategory;
+      if (filterStore !== '') where.category = { storeId: filterStore };
 
       let orderBy: any = {};
       if (sortBy === 'category') orderBy = { category: { name: sortOrder } };
@@ -85,8 +130,20 @@ export default function ItemsPage() {
   });
 
   const { data: categories } = useQuery({
-    queryKey: ['categories'],
-    queryFn: () => window.electronAPI.dbQuery('itemCategory', 'findMany', { orderBy: { name: 'asc' } }),
+    queryKey: ['categories', filterStore],
+    queryFn: () => {
+      const where: any = {};
+      if (filterStore !== '') {
+        // Show global categories (storeId=null) + categories belonging to this store
+        where.OR = [{ storeId: null }, { storeId: filterStore }];
+      }
+      return window.electronAPI.dbQuery('itemCategory', 'findMany', { where, orderBy: { name: 'asc' } });
+    },
+  });
+
+  const { data: stores } = useQuery({
+    queryKey: ['stores'],
+    queryFn: () => window.electronAPI.dbQuery('store', 'findMany', { where: { isActive: true }, orderBy: { name: 'asc' } }),
   });
 
   const { data: units } = useQuery({
@@ -105,24 +162,32 @@ export default function ItemsPage() {
   const saveMutation = useMutation({
     mutationFn: async (data: any) => {
       const api = window.electronAPI;
-      if (!editingItem) {
-        const category = categories?.find((c: any) => c.id === data.categoryId);
-        if (!category) throw new Error('Category is required');
-        const prefix = category.prefix;
-        const existingItems: any[] = await api.dbQuery('item', 'findMany', {
-          where: { categoryId: data.categoryId }, select: { itemCode: true }, orderBy: { itemCode: 'asc' },
-        });
-        const existingNumbers = new Set<number>();
-        let maxPadLength = 4;
-        for (const item of existingItems) {
-          const numStr = item.itemCode.replace(`${prefix}-`, '');
-          const num = parseInt(numStr);
-          if (!isNaN(num)) { existingNumbers.add(num); if (numStr.length > maxPadLength) maxPadLength = numStr.length; }
+      let unitId = data.unitId;
+
+      if (!unitId && newUnitName.trim()) {
+        const existingUnit = units?.find((u: any) => u.name.toLowerCase() === newUnitName.trim().toLowerCase());
+        if (existingUnit) {
+          unitId = existingUnit.id;
+        } else {
+          const created: any = await api.createUnit({ name: newUnitName.trim() });
+          unitId = created.id;
+          queryClient.invalidateQueries({ queryKey: ['units'] });
         }
-        let nextNo = 1;
-        while (existingNumbers.has(nextNo)) nextNo++;
-        data = { ...data, itemCode: `${prefix}-${String(nextNo).padStart(maxPadLength, '0')}` };
       }
+
+      let categoryId = data.categoryId;
+      if (!categoryId) {
+        let defaultCat = categories?.[0];
+        if (!defaultCat) {
+          const created: any = await api.createCategory({ name: 'General', prefix: 'GEN' });
+          defaultCat = created;
+          queryClient.invalidateQueries({ queryKey: ['categories'] });
+        }
+        categoryId = defaultCat.id;
+      }
+
+      data = { ...data, unitId, categoryId };
+
       if (editingItem) return api.updateItem(editingItem.id, data);
       return api.createItem(data);
     },
@@ -130,8 +195,12 @@ export default function ItemsPage() {
       queryClient.invalidateQueries({ queryKey: ['items'] });
       setDialogOpen(false);
       setEditingItem(null);
-      setFormData({ itemCode: '', itemName: '', categoryId: 0, unitId: 0, minimumStockLevel: 0 });
+      setNewUnitName('');
+      reset({ itemCode: '', itemName: '', unitId: 0, minimumStockLevel: 0 });
       toast.success(editingItem ? 'Item updated' : 'Item created');
+    },
+    onError: (err: Error) => {
+      toast.error(getErrorMessage(err, 'Failed to save item'));
     },
   });
 
@@ -148,7 +217,7 @@ export default function ItemsPage() {
       setDeletingItem(null);
       toast.success('Item deleted');
     },
-    onError: (err: any) => toast.error(err.message),
+    onError: (err: any) => toast.error(getErrorMessage(err, 'Failed to delete item')),
   });
 
   const bulkDeleteMutation = useMutation({
@@ -168,27 +237,33 @@ export default function ItemsPage() {
       setSelected(new Set());
       toast.success(`Deleted ${result.deleted} items${result.skipped ? `, ${result.skipped} skipped` : ''}`);
     },
+    onError: (err: Error) => {
+      toast.error(getErrorMessage(err, 'Failed to delete items'));
+    },
   });
 
-  const handleSave = useCallback(() => saveMutation.mutate(formData), [saveMutation, formData]);
+  const handleSave = handleSubmit((data) => saveMutation.mutate(data));
 
   const handleEdit = useCallback((item: any) => {
     setEditingItem(item);
-    setFormData({ itemCode: item.itemCode, itemName: item.itemName, categoryId: item.categoryId, unitId: item.unitId, minimumStockLevel: item.minimumStockLevel });
+    reset({ itemCode: item.itemCode, itemName: item.itemName, unitId: item.unitId, minimumStockLevel: item.minimumStockLevel });
     setDialogOpen(true);
-  }, []);
+  }, [reset]);
 
   const handleAdd = useCallback(() => {
     setEditingItem(null);
-    setFormData({ itemCode: '', itemName: '', categoryId: 0, unitId: 0, minimumStockLevel: 0 });
+    setNewUnitName('');
+    reset({ itemCode: '', itemName: '', unitId: 0, minimumStockLevel: 0 });
     setDialogOpen(true);
-  }, []);
+  }, [reset]);
 
   const handleSort = useCallback((field: string) => {
-    setSortOrder((prev) => sortBy === field ? (prev === 'asc' ? 'desc' : 'asc') : 'asc');
-    setSortBy(field);
+    const newOrder = sortBy === field && sortOrder === 'asc' ? 'desc' : 'asc';
+    setSortOrderLocal(newOrder);
+    setSortByLocal(field);
+    setLsSort(field, newOrder);
     setPage(0);
-  }, [sortBy]);
+  }, [sortBy, sortOrder, setLsSort]);
 
   const toggleFavorite = useCallback((id: number) => {
     setFavorites((prev) => {
@@ -236,38 +311,136 @@ export default function ItemsPage() {
     minimumStockLevel: item.minimumStockLevel, isActive: item.isActive ? 'Yes' : 'No',
   }));
 
+  const [importProgress, setImportProgress] = useState<ImportProgress>(getInitialProgress);
+
   const handleImportItems = async (rows: any[]) => {
-    try {
-      const api = window.electronAPI;
-      let created = 0, updated = 0, skipped = 0;
-      for (const row of rows) {
-        try {
-          const itemCode = row['Item Code'] || row['itemCode'] || '';
-          const itemName = row['Item Name'] || row['itemName'] || '';
-          if (!itemCode || !itemName) { skipped++; continue; }
-          const catName = row['Category'] || row['categoryName'] || '';
-          const unitName = row['Unit'] || row['unitName'] || '';
-          const minStock = Number(row['Min Stock'] || row['minimumStockLevel'] || 0);
-          const isActive = (row['Active'] || row['isActive'] || 'Yes') !== 'No';
-          let categoryId = 0, unitId = 0;
-          if (catName) { const cat = categories?.find((c: any) => c.name === catName); categoryId = cat?.id || 0; }
-          if (unitName) { const unit = units?.find((u: any) => u.name === unitName); unitId = unit?.id || 0; }
-          const existing = await api.dbQuery('item', 'findFirst', { where: { itemCode } });
-          if (existing) {
-            await api.updateItem(existing.id, { itemName, ...(categoryId ? { categoryId } : {}), ...(unitId ? { unitId } : {}), minimumStockLevel: minStock, isActive });
-            updated++;
-          } else {
-            await api.createItem({ itemCode, itemName, categoryId: categoryId || categories?.[0]?.id || 1, unitId: unitId || units?.[0]?.id || 1, minimumStockLevel: minStock, isActive });
-            created++;
+    const api = window.electronAPI;
+    const total = rows.length;
+    let created = 0, updated = 0, skipped = 0;
+    const errors: string[] = [];
+
+    setImportProgress({ active: true, current: 0, total, created: 0, updated: 0, skipped: 0, errors: [] });
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      try {
+        const itemCode = row['Item Code'] || row['itemCode'] || '';
+        const itemName = row['Item Name'] || row['itemName'] || '';
+        if (!itemCode || !itemName) {
+          skipped++;
+          errors.push(`Row ${i + 1}: Missing item code or name`);
+          setImportProgress(prev => ({ ...prev, current: i + 1, skipped, errors }));
+          continue;
+        }
+
+        const catName = row['Category'] || row['categoryName'] || '';
+        const unitName = row['Unit'] || row['unitName'] || '';
+        const minStock = Number(row['Min Stock'] || row['minimumStockLevel'] || 0);
+        const isActive = (row['Active'] || row['isActive'] || 'Yes') !== 'No';
+
+        let categoryId = 0;
+        let unitId = 0;
+
+        if (catName) {
+          let cat = categories?.find((c: any) => c.name.toLowerCase() === catName.toLowerCase());
+          if (!cat) {
+            const allCats = await api.dbQuery('itemCategory', 'findMany', { where: {} });
+            cat = allCats.find((c: any) => c.name.toLowerCase() === catName.toLowerCase());
           }
-        } catch { skipped++; }
+          if (cat) {
+            categoryId = cat.id;
+          } else {
+            try {
+              const createdCat: any = await api.createCategory({ name: catName, prefix: catName.substring(0, 3).toUpperCase() });
+              categoryId = createdCat.id;
+            } catch {
+              const allCats = await api.dbQuery('itemCategory', 'findMany', { where: {} });
+              cat = allCats.find((c: any) => c.name.toLowerCase() === catName.toLowerCase());
+              if (cat) categoryId = cat.id;
+            }
+            queryClient.invalidateQueries({ queryKey: ['categories'] });
+          }
+        } else {
+          let defaultCat = categories?.[0];
+          if (!defaultCat) {
+            try {
+              const createdCat: any = await api.createCategory({ name: 'General', prefix: 'GEN' });
+              defaultCat = createdCat;
+            } catch {
+              const allCats = await api.dbQuery('itemCategory', 'findMany', { where: {} });
+              defaultCat = allCats[0];
+            }
+            queryClient.invalidateQueries({ queryKey: ['categories'] });
+          }
+          if (defaultCat) categoryId = defaultCat.id;
+        }
+
+        if (unitName) {
+          let unit = units?.find((u: any) => u.name.toLowerCase() === unitName.toLowerCase());
+          if (!unit) {
+            const allUnits = await api.dbQuery('unit', 'findMany', { where: {} });
+            unit = allUnits.find((u: any) => u.name.toLowerCase() === unitName.toLowerCase());
+          }
+          if (unit) {
+            unitId = unit.id;
+          } else {
+            try {
+              const createdUnit: any = await api.createUnit({ name: unitName });
+              unitId = createdUnit.id;
+            } catch {
+              const allUnits = await api.dbQuery('unit', 'findMany', { where: {} });
+              unit = allUnits.find((u: any) => u.name.toLowerCase() === unitName.toLowerCase());
+              if (unit) unitId = unit.id;
+            }
+            queryClient.invalidateQueries({ queryKey: ['units'] });
+          }
+        } else {
+          let defaultUnit = units?.[0];
+          if (!defaultUnit) {
+            try {
+              const createdUnit: any = await api.createUnit({ name: 'Pcs' });
+              defaultUnit = createdUnit;
+            } catch {
+              const allUnits = await api.dbQuery('unit', 'findMany', { where: {} });
+              defaultUnit = allUnits[0];
+            }
+            queryClient.invalidateQueries({ queryKey: ['units'] });
+          }
+          if (defaultUnit) unitId = defaultUnit.id;
+        }
+
+        const existing = await api.dbQuery('item', 'findFirst', { where: { itemCode } });
+        if (existing) {
+          await api.updateItem(existing.id, { itemName, categoryId, unitId, minimumStockLevel: minStock, isActive });
+          updated++;
+        } else {
+          await api.createItem({ itemCode, itemName, categoryId, unitId, minimumStockLevel: minStock, isActive });
+          created++;
+        }
+      } catch (err: any) {
+        skipped++;
+        const msg = err?.message || 'Unknown error';
+        if (msg.includes('Foreign key constraint')) {
+          errors.push(`Row ${i + 1} (${row['Item Code'] || row['itemCode'] || '?'}): Category or Unit not found in database`);
+        } else if (msg.includes('Unique constraint')) {
+          errors.push(`Row ${i + 1} (${row['Item Code'] || row['itemCode'] || '?'}): Item code already exists`);
+        } else {
+          errors.push(`Row ${i + 1} (${row['Item Code'] || row['itemCode'] || '?'}): ${msg}`);
+        }
       }
-      queryClient.invalidateQueries({ queryKey: ['items'] });
-      toast.success(`Import: ${created} created, ${updated} updated, ${skipped} skipped`);
-    } catch (err: any) { toast.error('Import failed: ' + err.message); }
+      setImportProgress(prev => ({ ...prev, current: i + 1, created, updated, skipped, errors }));
+    }
+
+    queryClient.invalidateQueries({ queryKey: ['items'] });
+    setImportProgress(prev => ({ ...prev, active: false }));
+    if (skipped === 0) {
+      toast.success(`Import complete: ${created} created, ${updated} updated`);
+    } else {
+      toast(`Import: ${created} created, ${updated} updated, ${skipped} skipped`, { icon: '⚠️' });
+    }
   };
 
-  const activeFiltersCount = (filterCategory !== '' ? 1 : 0);
+  const activeFiltersCount = filterStore !== '' ? 1 : 0;
 
   return (
     <Box>
@@ -276,7 +449,9 @@ export default function ItemsPage() {
         subtitle={`${data?.total || 0} items in inventory`}
         actions={
           <Stack direction="row" spacing={1} alignItems="center">
-            <ImportExportButtons data={getExportData()} columns={exportColumns} fileName="items" onImport={handleImportItems} />
+            <GuideButton pageId="items" />
+            <ImportExportButtons data={getExportData()} columns={exportColumns} fileName="items" onImport={handleImportItems}
+              importColumns={['Item Code', 'Item Name', 'Category', 'Unit', 'Min Stock', 'Active']} />
             <Button variant="contained" startIcon={<Add />} onClick={handleAdd} sx={{ borderRadius: '10px', fontWeight: 600 }}>
               Add Item
             </Button>
@@ -296,7 +471,7 @@ export default function ItemsPage() {
             size="small"
             placeholder="Search by name or code..."
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => handleSearchChange(e.target.value)}
             InputProps={{
               startAdornment: <Search sx={{ mr: 0.75, color: 'text.secondary', fontSize: 18 }} />,
               sx: {
@@ -363,28 +538,28 @@ export default function ItemsPage() {
               <InputLabel sx={{ fontSize: '0.8125rem' }}>
                 <Stack direction="row" alignItems="center" spacing={0.5}>
                   <FilterList sx={{ fontSize: 14 }} />
-                  <span>Category</span>
+                  <span>Store</span>
                 </Stack>
               </InputLabel>
               <Select
-                value={filterCategory}
-                label="Category"
-                onChange={(e) => { setFilterCategory(e.target.value as number | ''); setPage(0); }}
+                value={filterStore}
+                label="Store"
+                onChange={(e) => { handleFilterStoreChange(e.target.value as number | ''); }}
                 sx={{ fontSize: '0.8125rem', borderRadius: '8px' }}
               >
-                <MenuItem value="">All Categories</MenuItem>
-                {categories?.map((c: any) => <MenuItem key={c.id} value={c.id}>{c.name} ({c.prefix})</MenuItem>)}
+                <MenuItem value="">All Stores</MenuItem>
+                {stores?.map((s: any) => <MenuItem key={s.id} value={s.id}>{s.name}</MenuItem>)}
               </Select>
             </FormControl>
 
-            {activeFiltersCount > 0 && (
+            {filterStore !== '' && (
               <Button
                 size="small"
                 startIcon={<FilterAltOff sx={{ fontSize: 14 }} />}
-                onClick={() => { setFilterCategory(''); setPage(0); }}
+                onClick={() => { handleFilterStoreChange(''); }}
                 sx={{ fontSize: '0.75rem', textTransform: 'none', color: 'text.secondary' }}
               >
-                Clear Filters
+                Clear Filter
               </Button>
             )}
 
@@ -532,9 +707,9 @@ export default function ItemsPage() {
             component="div"
             count={data?.total || 0}
             page={page}
-            onPageChange={(_, p) => setPage(p)}
+            onPageChange={handlePageChange}
             rowsPerPage={rowsPerPage}
-            onRowsPerPageChange={(e) => { setRowsPerPage(parseInt(e.target.value)); setPage(0); }}
+            onRowsPerPageChange={handleRowsPerPageChange}
             rowsPerPageOptions={[25, 50, 100]}
           />
         </>
@@ -628,101 +803,93 @@ export default function ItemsPage() {
       )}
 
       {/* Add/Edit Dialog */}
-      <Dialog
+      <EnterpriseDialog
         open={dialogOpen}
         onClose={() => setDialogOpen(false)}
+        title={editingItem ? 'Edit Item' : 'Add New Item'}
+        subtitle={editingItem ? `Update details for ${editingItem.itemName}` : 'Create a new inventory item'}
+        icon={<Inventory2 />}
         maxWidth="sm"
-        fullWidth
-        PaperProps={{ sx: { borderRadius: '16px', border: '1px solid', borderColor: 'divider' } }}
+        loading={saveMutation.isPending}
+        actions={
+          <>
+            <Button onClick={() => setDialogOpen(false)} sx={{ fontWeight: 500 }}>Cancel</Button>
+            <Button
+              variant="contained" onClick={handleSave}
+              disabled={!isValid || saveMutation.isPending}
+              startIcon={saveMutation.isPending ? <CircularProgress size={16} color="inherit" /> : null}
+              sx={{ fontWeight: 600, minWidth: 100 }}
+            >
+              {saveMutation.isPending ? 'Saving...' : editingItem ? 'Update' : 'Create'}
+            </Button>
+          </>
+        }
       >
-        <DialogTitle sx={{
-          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-          fontWeight: 700, fontSize: '1rem',
-        }}>
-          {editingItem ? 'Edit Item' : 'Add New Item'}
-          <IconButton onClick={() => setDialogOpen(false)} size="small"><Close sx={{ fontSize: 18 }} /></IconButton>
-        </DialogTitle>
-        <DialogContent sx={{ pt: '16px !important' }}>
-          <Stack spacing={2}>
-            {!editingItem ? (
+          <FormSection title="Item Details" divider={false}>
+            <Stack spacing={2}>
               <TextField
-                label="Item Code (Auto-generated)"
-                value={(() => {
-                  const cat = categories?.find((c: any) => c.id === formData.categoryId);
-                  return cat?.prefix ? `${cat.prefix}-____` : 'Select Category first';
-                })()}
-                fullWidth size="small" disabled InputProps={{ readOnly: true }}
-                sx={{ '& .MuiInputBase-input.Mui-disabled': { WebkitTextFillColor: isDark ? '#94A3B8' : '#64748B' } }}
+                label="Item Code"
+                {...register('itemCode')}
+                fullWidth required size="small"
+                error={!!errors.itemCode}
+                helperText={errors.itemCode?.message}
+                disabled={!!editingItem}
               />
-            ) : (
-              <TextField label="Item Code" value={formData.itemCode} fullWidth size="small" disabled />
-            )}
-            <TextField
-              label="Item Name" value={formData.itemName}
-              onChange={(e) => setFormData({ ...formData, itemName: e.target.value })}
-              fullWidth required autoFocus size="small"
-              error={formData.itemName === '' && formData.categoryId > 0}
-              helperText={formData.itemName === '' && formData.categoryId > 0 ? 'Required' : ''}
-            />
-            <TextField
-              select label="Category" value={formData.categoryId}
-              onChange={(e) => setFormData({ ...formData, categoryId: Number(e.target.value) })}
-              fullWidth SelectProps={{ native: true }} size="small"
-            >
-              <option value={0}>Select Category</option>
-              {categories?.map((c: any) => <option key={c.id} value={c.id}>{c.name} ({c.prefix})</option>)}
-            </TextField>
-            <TextField
-              select label="Unit" value={formData.unitId}
-              onChange={(e) => setFormData({ ...formData, unitId: Number(e.target.value) })}
-              fullWidth SelectProps={{ native: true }} size="small"
-            >
-              <option value={0}>Select Unit</option>
-              {units?.map((u: any) => <option key={u.id} value={u.id}>{u.name}</option>)}
-            </TextField>
-            <TextField
-              label="Minimum Stock Level" type="number"
-              value={formData.minimumStockLevel}
-              onChange={(e) => setFormData({ ...formData, minimumStockLevel: Number(e.target.value) })}
-              fullWidth size="small" helperText="Set to 0 if no minimum tracking needed"
-            />
-          </Stack>
-        </DialogContent>
-        <DialogActions sx={{ px: 3, pb: 2, gap: 1 }}>
-          <Button onClick={() => setDialogOpen(false)} sx={{ fontWeight: 500 }}>Cancel</Button>
-          <Button
-            variant="contained" onClick={handleSave}
-            disabled={!formData.itemName || !formData.categoryId || !formData.unitId || saveMutation.isPending}
-            startIcon={saveMutation.isPending ? <CircularProgress size={16} color="inherit" /> : null}
-            sx={{ fontWeight: 600, minWidth: 100 }}
-          >
-            {saveMutation.isPending ? 'Saving...' : editingItem ? 'Update' : 'Create'}
-          </Button>
-        </DialogActions>
-      </Dialog>
+              <TextField
+                label="Item Name"
+                {...register('itemName')}
+                fullWidth required autoFocus size="small"
+                error={!!errors.itemName}
+                helperText={errors.itemName?.message}
+              />
+              <Autocomplete
+                freeSolo
+                options={units || []}
+                getOptionLabel={(o) => typeof o === 'string' ? o : o.name}
+                value={units?.find((u: any) => u.id === watch('unitId')) || null}
+                onChange={(_, v) => {
+                  if (typeof v === 'string') {
+                    const match = units?.find((u: any) => u.name.toLowerCase() === v.toLowerCase());
+                    setValue('unitId', match?.id || 0, { shouldValidate: true });
+                    setNewUnitName(match ? '' : v);
+                  } else {
+                    setValue('unitId', v?.id || 0, { shouldValidate: true });
+                    setNewUnitName('');
+                  }
+                }}
+                onInputChange={(_, v) => { if (!v) { setValue('unitId', 0, { shouldValidate: true }); setNewUnitName(''); } }}
+                renderInput={(params) => <TextField {...params} label="Unit" placeholder="Type or select..." />}
+                size="small" fullWidth
+              />
+              <TextField
+                label="Minimum Stock Level" type="number"
+                {...register('minimumStockLevel', { valueAsNumber: true })}
+                fullWidth size="small" helperText="Set to 0 if no minimum tracking needed"
+              />
+            </Stack>
+          </FormSection>
+      </EnterpriseDialog>
+
+      <ImportProgressDialog progress={importProgress} onClose={() => setImportProgress(getInitialProgress())} entityLabel="items" />
 
       {/* Delete Dialog */}
-      <Dialog
+      <ConfirmDialog
         open={deleteDialogOpen}
-        onClose={() => setDeleteDialogOpen(false)}
-        PaperProps={{ sx: { borderRadius: '16px', border: '1px solid', borderColor: 'divider' } }}
-      >
-        <DialogTitle sx={{ fontWeight: 700, fontSize: '1rem' }}>Delete Item</DialogTitle>
-        <DialogContent>
-          <Typography fontSize="0.875rem">
+        title="Delete Item"
+        message={
+          <>
             Are you sure you want to delete "<strong>{deletingItem?.itemName}</strong>" ({deletingItem?.itemCode})?
-          </Typography>
-          <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
-            Items with stock transactions cannot be deleted.
-          </Typography>
-        </DialogContent>
-        <DialogActions sx={{ px: 3, pb: 2, gap: 1 }}>
-          <Button onClick={() => setDeleteDialogOpen(false)} sx={{ fontWeight: 500 }}>Cancel</Button>
-          <Button variant="contained" color="error" onClick={() => deletingItem && deleteMutation.mutate(deletingItem.id)} sx={{ fontWeight: 600 }}>
-            Delete
-          </Button>
-        </DialogActions>
-      </Dialog>
+            <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+              Items with stock transactions cannot be deleted.
+            </Typography>
+          </>
+        }
+        confirmText="Delete"
+        confirmColor="error"
+        onConfirm={() => deletingItem && deleteMutation.mutate(deletingItem.id)}
+        onCancel={() => { setDeleteDialogOpen(false); setDeletingItem(null); }}
+        loading={deleteMutation.isPending}
+      />
     </Box>
   );
 }

@@ -1,11 +1,11 @@
-import React, { useState, useRef } from 'react';
+import React, { useState } from 'react';
 import {
   Button, Menu, MenuItem, ListItemIcon, ListItemText, Dialog, DialogTitle,
   DialogContent, DialogActions, Typography, Stack, Alert, CircularProgress,
   Chip, Box,
 } from '@mui/material';
 import {
-  FileDownload, FileUpload, ExpandMore, TableChart, Description,
+  FileDownload, FileUpload, ExpandMore, TableChart, Description, Info,
 } from '@mui/icons-material';
 import { ExportColumn, exportToExcel, exportToCSV, importFromFile } from '../utils/importExport';
 import toast from 'react-hot-toast';
@@ -18,6 +18,7 @@ interface ImportExportButtonsProps {
   onExportOpen?: () => void;
   showImport?: boolean;
   showExport?: boolean;
+  importColumns?: string[];
 }
 
 export default function ImportExportButtons({
@@ -28,11 +29,12 @@ export default function ImportExportButtons({
   onExportOpen,
   showImport = true,
   showExport = true,
+  importColumns,
 }: ImportExportButtonsProps) {
   const [exportAnchor, setExportAnchor] = useState<null | HTMLElement>(null);
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<any>(null);
-  const [resultDialog, setResultDialog] = useState(false);
+  const [showImportInfo, setShowImportInfo] = useState(false);
 
   const handleExportExcel = async () => {
     setExportAnchor(null);
@@ -54,14 +56,12 @@ export default function ImportExportButtons({
     }
   };
 
-  const handleImport = async () => {
+  const handleImportFile = async () => {
+    setShowImportInfo(false);
     setImporting(true);
     try {
       const result = await importFromFile();
       if (result && result.rows.length > 0) {
-        if (onImport) {
-          onImport(result.rows);
-        }
         setImportResult({ ...result, fileName: 'file' });
       }
     } catch (err: any) {
@@ -106,7 +106,7 @@ export default function ImportExportButtons({
             variant="outlined"
             size="small"
             startIcon={importing ? <CircularProgress size={16} /> : <FileUpload />}
-            onClick={handleImport}
+            onClick={() => importColumns ? setShowImportInfo(true) : handleImportFile()}
             disabled={importing}
           >
             {importing ? 'Importing...' : 'Import'}
@@ -114,6 +114,48 @@ export default function ImportExportButtons({
         )}
       </Stack>
 
+      {/* Pre-import info dialog — shows expected columns */}
+      {showImportInfo && (
+        <Dialog open={showImportInfo} onClose={() => setShowImportInfo(false)} maxWidth="sm" fullWidth>
+          <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <Info sx={{ color: 'info.main' }} />
+            Import Columns
+          </DialogTitle>
+          <DialogContent>
+            <Stack spacing={2}>
+              <Alert severity="info" sx={{ borderRadius: 2 }}>
+                Your Excel file must contain these columns. Required columns (*) are mandatory.
+              </Alert>
+              <Box>
+                <Typography variant="subtitle2" gutterBottom>Expected columns:</Typography>
+                <Stack direction="row" flexWrap="wrap" gap={0.5}>
+                  {importColumns?.map((col) => (
+                    <Chip
+                      key={col}
+                      label={col}
+                      size="small"
+                      variant="filled"
+                      color="primary"
+                      sx={{ fontSize: '0.75rem' }}
+                    />
+                  ))}
+                </Stack>
+              </Box>
+              <Alert severity="warning" sx={{ borderRadius: 2 }}>
+                Column names are case-sensitive. Download the template first using the Export button.
+              </Alert>
+            </Stack>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setShowImportInfo(false)}>Cancel</Button>
+            <Button variant="contained" onClick={handleImportFile}>
+              Choose File
+            </Button>
+          </DialogActions>
+        </Dialog>
+      )}
+
+      {/* Post-import result dialog */}
       {importResult && (
         <Dialog open={!!importResult} onClose={() => setImportResult(null)} maxWidth="sm" fullWidth>
           <DialogTitle>Import Result</DialogTitle>
@@ -123,7 +165,7 @@ export default function ImportExportButtons({
                 Successfully parsed {importResult.rows.length} rows from {importResult.headers.length} columns.
               </Alert>
               <Box>
-                <Typography variant="subtitle2" gutterBottom>Columns found:</Typography>
+                <Typography variant="subtitle2" gutterBottom>Columns found in your file:</Typography>
                 <Stack direction="row" flexWrap="wrap" gap={0.5}>
                   {importResult.headers.map((h: string) => (
                     <Chip key={h} label={h} size="small" variant="outlined" />
@@ -131,7 +173,7 @@ export default function ImportExportButtons({
                 </Stack>
               </Box>
               <Alert severity="info">
-                Click "Send to Server" to save these records to the database. Existing records will be updated, new ones created.
+                Click "Send to Server" to save records. Existing records will be updated, new ones will be created.
               </Alert>
             </Stack>
           </DialogContent>

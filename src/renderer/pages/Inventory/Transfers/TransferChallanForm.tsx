@@ -1,567 +1,742 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
-  Box, Typography, Button, TextField, Stack, Paper, Table, TableBody,
+  Box, Typography, Button, TextField, Stack, Table, TableBody,
   TableCell, TableContainer, TableHead, TableRow, IconButton, Autocomplete,
-  Divider, Card, CardContent, Grid, FormControl, InputLabel, Select, MenuItem,
-  Chip, alpha, useTheme,
+  Grid, Chip, alpha, useTheme, Tooltip,
 } from '@mui/material';
-import { Add, Delete, Save, ArrowBack, Transform, Inventory2 } from '@mui/icons-material';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Add, Delete, ArrowBack, Transform, Inventory2 } from '@mui/icons-material';
+import { useQuery } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router-dom';
-import { isIntegerOnlyUnit } from '../../../utils/unitUtils';
 import { useCompany } from '../../../context/CompanyContext';
 import PageHeader from '../../../components/PageHeader';
+import EnterpriseDialog from '../../../components/EnterpriseDialog';
 import DatePickerField from '../../../components/DatePickerField';
-import { formatDateDDMMYYYY, todayISO } from '../../../utils/dateUtils';
+import { todayISO } from '../../../utils/dateUtils';
+import { isIntegerOnlyUnit } from '../../../utils/unitUtils';
+import { toNumber } from '../../../utils/numberUtils';
+import { TransferChallanFormData, TransferChallanItem } from '../types';
+import { useChallanForm } from '../hooks/useChallanForm';
+import { useChallanSave } from '../hooks/useChallanSave';
+import ChallanFormSection from '../components/ChallanFormSection';
+import ActionBar from '../components/ActionBar';
+import EmptyItemsState from '../components/EmptyItemsState';
+import SuccessScreen from '../../../components/SuccessScreen';
+import PostConfirmationDialog from '../../../components/PostConfirmationDialog';
+import toast from 'react-hot-toast';
+import { getErrorMessage } from '../../../utils/errorUtils';
+import { useUnsavedChangesWarning } from '../../../hooks/useUnsavedChangesWarning';
+import UnsavedChangesDialog from '../../../components/UnsavedChangesDialog';
+
+const INITIAL_ITEM: TransferChallanItem = {
+  itemId: 0,
+  quantity: 1,
+  rate: 0,
+  remarks: '',
+};
 
 export default function TransferChallanForm() {
   const { company, financialYear } = useCompany();
   const navigate = useNavigate();
   const { id } = useParams();
-  const queryClient = useQueryClient();
   const theme = useTheme();
-  const isDark = theme.palette.mode === 'dark';
   const isEdit = id && id !== 'new';
 
-  const [formData, setFormData] = useState({
+  // Guard against stale async responses when switching between records
+  const editRequestIdRef = useRef(0);
+
+  const [formData, setFormData] = useState<TransferChallanFormData>({
     date: todayISO(),
-    fromDepartmentId: 0,
-    toDepartmentId: 0,
+    fromStoreId: 0,
+    toStoreId: 0,
     transferredBy: '',
     approvedBy: '',
     remarks: '',
-    items: [] as Array<{ itemId: number; quantity: number; rate: number; remarks: string; fromLocationId: number | null; toLocationId: number | null }>,
+    items: [],
   });
 
-  const { data: departments } = useQuery({
-    queryKey: ['departments'],
-    queryFn: () => window.electronAPI.dbQuery('department', 'findMany', { where: { companyId: company!.id, isActive: true }, orderBy: { name: 'asc' } }),
+  const {
+    items, setItems, addItem, updateItem, removeItem,
+  } = useChallanForm<TransferChallanItem>({
+    storageKey: 'recentTransferItems',
+    initialItem: () => ({ ...INITIAL_ITEM }),
   });
 
-  const { data: items } = useQuery({
+  const { data: stores } = useQuery({
+    queryKey: ['stores', company?.id],
+    queryFn: () => window.electronAPI.dbQuery('store', 'findMany', { where: { companyId: company!.id, isActive: true }, orderBy: { name: 'asc' } }),
+  });
+
+  const { data: itemsData } = useQuery({
     queryKey: ['items'],
-    queryFn: () => window.electronAPI.dbQuery('item', 'findMany', { where: { isActive: true }, include: { unit: true }, orderBy: { itemName: 'asc' } }),
-  });
-
-  const { data: allLocations } = useQuery({
-    queryKey: ['locations'],
-    queryFn: () => window.electronAPI.dbQuery('location', 'findMany', { where: { isActive: true }, orderBy: { locationName: 'asc' } }),
+    queryFn: () => window.electronAPI.dbQuery('item', 'findMany', {
+      where: { isActive: true },
+      include: { unit: true },
+      orderBy: { itemName: 'asc' },
+    }),
   });
 
   const { data: stockBalances } = useQuery({
-    queryKey: ['stockBalanceTransfer', company?.id, financialYear?.id],
+    queryKey: ['stockBalanceTransfer', company?.id, financialYear?.id, formData.fromStoreId],
     queryFn: async () => {
-      const txns = await window.electronAPI.dbQuery('stockTransaction', 'findMany', {
-        where: { companyId: company!.id, financialYearId: financialYear!.id },
-        select: { itemId: true, departmentId: true, locationId: true, quantityIn: true, quantityOut: true, transactionType: true },
-      });
-      const bal: Record<string, number> = {};
-      txns.forEach((t: any) => {
-        if (!t.departmentId) return;
-        const qtyIn = Number(t.quantityIn || 0);
-        const qtyOut = Number(t.quantityOut || 0);
-        const key = `${t.itemId}-${t.departmentId}-${t.locationId ?? 'null'}`;
-        if (!bal[key]) bal[key] = 0;
-        bal[key] += qtyIn - qtyOut;
-      });
-      return bal;
+      if (!formData.fromStoreId) return [];
+      return await window.electronAPI.getStoreStock(company!.id, financialYear!.id, formData.fromStoreId);
     },
-    enabled: !!company?.id && !!financialYear?.id,
+    enabled: !!company?.id && !!financialYear?.id && !!formData.fromStoreId,
     refetchOnMount: true,
   });
 
-  const selectedFromDept = departments?.find((d: any) => d.id === formData.fromDepartmentId);
-  const selectedToDept = departments?.find((d: any) => d.id === formData.toDepartmentId);
-  const isFromDharamshala = selectedFromDept?.departmentType === 'Dharamshala';
-  const isToDharamshala = selectedToDept?.departmentType === 'Dharamshala';
+  const { data: units } = useQuery({
+    queryKey: ['units'],
+    queryFn: () => window.electronAPI.dbQuery('unit', 'findMany', { orderBy: { name: 'asc' } }),
+  });
 
-  const deptStockMap = useMemo(() => {
-    if (!stockBalances) return {};
+  const selectedFromStore = useMemo(
+    () => stores?.find((s: any) => s.id === formData.fromStoreId),
+    [stores, formData.fromStoreId]
+  );
+  const selectedToStore = useMemo(
+    () => stores?.find((s: any) => s.id === formData.toStoreId),
+    [stores, formData.toStoreId]
+  );
+
+  const storeStockMap = useMemo(() => {
+    if (!stockBalances || !Array.isArray(stockBalances)) return {};
     const map: Record<number, number> = {};
-    Object.entries(stockBalances).forEach(([key, bal]) => {
-      const [itemIdStr, deptIdStr] = key.split('-');
-      const itemId = Number(itemIdStr);
-      const deptId = Number(deptIdStr);
-      if (formData.fromDepartmentId && deptId === formData.fromDepartmentId) {
-        if (!map[itemId]) map[itemId] = 0;
-        map[itemId] += bal;
+    stockBalances.forEach((bal: any) => {
+      if (bal.storeId === formData.fromStoreId) {
+        map[bal.itemId] = (map[bal.itemId] || 0) + Number(bal.available || 0);
       }
     });
     return map;
-  }, [stockBalances, formData.fromDepartmentId]);
+  }, [stockBalances, formData.fromStoreId]);
 
-  const roomsWithStock = useMemo(() => {
-    if (!stockBalances || !formData.fromDepartmentId) return new Set<number>();
-    const roomIds = new Set<number>();
-    Object.entries(stockBalances).forEach(([key, bal]) => {
-      const parts = key.split('-');
-      const deptId = Number(parts[1]);
-      const locId = parts[2] === 'null' ? null : Number(parts[2]);
-      if (deptId === formData.fromDepartmentId && locId && bal > 0) {
-        roomIds.add(locId);
-      }
-    });
-    return roomIds;
-  }, [stockBalances, formData.fromDepartmentId]);
+  const getItemStock = useCallback(
+    (itemId: number, locationId: number | null | undefined) => {
+      if (!stockBalances || !Array.isArray(stockBalances) || !formData.fromStoreId) return 0;
+      const match = stockBalances.find((b: any) => b.itemId === itemId && b.storeId === formData.fromStoreId);
+      return match ? Number(match.available || 0) : 0;
+    },
+    [stockBalances, formData.fromStoreId]
+  );
 
-  const getItemStock = useCallback((itemId: number, locationId: number | null | undefined) => {
-    if (!stockBalances || !formData.fromDepartmentId) return 0;
-    const locKey = locationId != null ? String(locationId) : 'null';
-    const key = `${itemId}-${formData.fromDepartmentId}-${locKey}`;
-    return stockBalances[key] || 0;
-  }, [stockBalances, formData.fromDepartmentId]);
+  const availableItems = useMemo(
+    () =>
+      !formData.fromStoreId || !itemsData
+        ? []
+        : itemsData.filter((item: any) => (storeStockMap[item.id] || 0) > 0),
+    [itemsData, storeStockMap, formData.fromStoreId]
+  );
 
-  const availableItems = useMemo(() => {
-    if (!formData.fromDepartmentId || !items) return [];
-    return items.filter((item: any) => (deptStockMap[item.id] || 0) > 0);
-  }, [items, deptStockMap, formData.fromDepartmentId]);
+  // Quick Add Item dialog state
+  const [quickAddOpen, setQuickAddOpen] = useState(false);
+  const [quickAddItemName, setQuickAddItemName] = useState('');
+  const [quickAddItemCode, setQuickAddItemCode] = useState('');
+  const [quickAddUnit, setQuickAddUnit] = useState('');
 
-  const fromRoomLocations = useMemo(() => {
-    if (!allLocations || !selectedFromDept) return [];
-    const deptName = selectedFromDept.name.trim();
-    const parentLoc = allLocations.find((l: any) =>
-      (l.locationType === 'Dharamshala' || l.locationType === 'Store') && l.locationName.trim() === deptName
-    );
-    if (parentLoc) {
-      const allRooms = allLocations.filter((l: any) => l.parentId === parentLoc.id && l.locationType === 'Room');
-      if (roomsWithStock.size > 0) return allRooms.filter((l: any) => roomsWithStock.has(l.id));
-      return allRooms;
-    }
-    const allRooms = allLocations.filter((l: any) => l.locationType === 'Room');
-    if (roomsWithStock.size > 0) return allRooms.filter((l: any) => roomsWithStock.has(l.id));
-    return allRooms;
-  }, [allLocations, selectedFromDept, roomsWithStock]);
-
-  const toRoomLocations = useMemo(() => {
-    if (!allLocations || !selectedToDept) return [];
-    const deptName = selectedToDept.name.trim();
-    const parentLoc = allLocations.find((l: any) =>
-      (l.locationType === 'Dharamshala' || l.locationType === 'Store') && l.locationName.trim() === deptName
-    );
-    if (parentLoc) return allLocations.filter((l: any) => l.parentId === parentLoc.id && l.locationType === 'Room');
-    return allLocations.filter((l: any) => l.locationType === 'Room');
-  }, [allLocations, selectedToDept]);
-
-  const recentItemIds = useState<number[]>(() => {
-    try { return JSON.parse(localStorage.getItem('recentTransferItems') || '[]'); } catch { return []; }
-  })[0];
-
-  const addItem = () => setFormData((prev) => ({
-    ...prev,
-    items: [...prev.items, { itemId: 0, quantity: 1, rate: 0, remarks: '', fromLocationId: null, toLocationId: null }],
-  }));
-
-  const updateItem = (index: number, field: string, value: any) => {
-    setFormData((prev) => {
-      const items = [...prev.items];
-      (items[index] as any)[field] = value;
-      return { ...prev, items };
-    });
-  };
-
-  const removeItem = (index: number) => setFormData((prev) => ({ ...prev, items: prev.items.filter((_, i) => i !== index) }));
-
-  useEffect(() => {
-    if (isEdit) {
-      window.electronAPI.dbQuery('transferChallan', 'findUnique', {
-        where: { id: Number(id) },
-        include: { items: { include: { item: true, location: true, toLocation: true } } },
-      }).then((tc: any) => {
-        if (tc) {
-          setFormData({
-            date: tc.date.split('T')[0],
-            fromDepartmentId: tc.fromDepartmentId,
-            toDepartmentId: tc.toDepartmentId,
-            transferredBy: tc.transferredBy,
-            approvedBy: tc.approvedBy || '',
-            remarks: tc.remarks || '',
-            items: tc.items.map((i: any) => ({
-              itemId: i.itemId, quantity: Number(i.quantity), rate: Number(i.rate), remarks: i.remarks || '',
-              fromLocationId: i.locationId || null, toLocationId: i.toLocationId || null,
-            })),
-          });
-        }
-      });
-    }
-  }, [id, isEdit]);
-
-  const saveMutation = useMutation({
-    mutationFn: async (status: 'Draft' | 'Posted') => {
-      const api = window.electronAPI;
-      const formattedItems = formData.items.map(i => ({
-        itemId: i.itemId, quantity: i.quantity, rate: 0, remarks: i.remarks,
-        locationId: i.fromLocationId || null,
-        toLocationId: i.toLocationId || null,
-      }));
-
-      const payload = {
+  const { saveMutation, savedResult, clearSavedResult } = useChallanSave({
+    challanType: 'TC',
+    listKey: 'transferChallans',
+    entityName: 'transfer challan',
+    editPath: '/inventory/transfer-challan',
+    isEdit: !!isEdit,
+    editId: id,
+    saveFn: (payload, formattedItems, isEditFn, editIdNum) =>
+      window.electronAPI.saveTransferChallan(payload, formattedItems, isEditFn, editIdNum),
+    postFn: (challanId) => window.electronAPI.postTransferChallan(challanId),
+    buildPayload: () => ({
+      payload: {
         date: formData.date,
-        fromDepartmentId: formData.fromDepartmentId,
-        toDepartmentId: formData.toDepartmentId,
+        fromStoreId: formData.fromStoreId,
+        toStoreId: formData.toStoreId,
         transferredBy: formData.transferredBy,
         approvedBy: formData.approvedBy,
         remarks: formData.remarks,
         companyId: company!.id,
         financialYearId: financialYear!.id,
         status: 'Draft' as const,
-      };
-
-      let savedChallan: any;
-      if (isEdit) {
-        savedChallan = await api.saveTransferChallan(payload, formattedItems, true, Number(id));
-      } else {
-        const challans = await api.dbQuery('transferChallan', 'findMany', {
-          where: { companyId: company!.id, financialYearId: financialYear!.id },
-          orderBy: { id: 'desc' }, take: 1,
-        });
-        const lastNo = challans.length > 0 ? parseInt(challans[0].challanNo.replace('TC-', '')) + 1 : 1;
-        const challanNo = `TC-${String(lastNo).padStart(5, '0')}`;
-        savedChallan = await api.saveTransferChallan({ ...payload, challanNo }, formattedItems, false);
-      }
-
-      if (status === 'Posted' && savedChallan) {
-        await api.postTransferChallan(savedChallan.id);
-      }
-      return savedChallan;
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['transferChallans'] });
-      queryClient.invalidateQueries({ queryKey: ['stockTransactions'] });
-      queryClient.invalidateQueries({ queryKey: ['stockLedger'] });
-      queryClient.invalidateQueries({ queryKey: ['stockBalance'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard'] });
-      queryClient.invalidateQueries({ queryKey: ['itemHistory'] });
-      queryClient.invalidateQueries({ queryKey: ['locationBalances'] });
-      queryClient.invalidateQueries({ queryKey: ['report'] });
-      navigate('/inventory/transfer-challan');
-    },
-    onError: (error: any) => {
-      alert(error?.message || 'Failed to save transfer challan');
-    },
+      },
+      items: items.map((i) => ({
+        itemId: i.itemId,
+        quantity: i.quantity,
+        rate: 0,
+        condition: 'GOOD',
+        remarks: i.remarks,
+      })),
+    }),
   });
 
-  const hasInsufficientStock = formData.fromDepartmentId > 0 && formData.items.some(
-    i => i.itemId > 0 && i.quantity > getItemStock(i.itemId, i.fromLocationId)
-  );
+  const initialFormDataRef = useRef<TransferChallanFormData>({
+    date: todayISO(),
+    fromStoreId: 0,
+    toStoreId: 0,
+    transferredBy: '',
+    approvedBy: '',
+    remarks: '',
+    items: [],
+  });
+  const initialItemsRef = useRef<TransferChallanItem[]>([]);
+  const editLoadedRef = useRef(!isEdit);
+
+  useEffect(() => {
+    if (isEdit) {
+      const requestId = ++editRequestIdRef.current;
+      window.electronAPI.dbQuery('transferChallan', 'findUnique', {
+        where: { id: Number(id) },
+        include: { items: { include: { item: { include: { unit: true } } } } },
+      }).then((tc: any) => {
+        if (requestId !== editRequestIdRef.current) return;
+        if (tc) {
+          const loadedFormData: TransferChallanFormData = {
+            date: tc.date.split('T')[0],
+            fromStoreId: tc.fromStoreId || 0,
+            toStoreId: tc.toStoreId || 0,
+            transferredBy: tc.transferredBy,
+            approvedBy: tc.approvedBy || '',
+            remarks: tc.remarks || '',
+            items: [],
+          };
+          const loadedItems: TransferChallanItem[] = tc.items.map((i: any) => ({
+            itemId: i.itemId,
+            quantity: toNumber(i.quantity),
+            rate: toNumber(i.rate),
+            remarks: i.remarks || '',
+          }));
+          initialFormDataRef.current = loadedFormData;
+          initialItemsRef.current = loadedItems;
+          setFormData(loadedFormData);
+          setItems(loadedItems);
+          editLoadedRef.current = true;
+        }
+      });
+    }
+  }, [id, isEdit, setItems]);
+
+  const isDirty = useMemo(() => {
+    if (!editLoadedRef.current) return false;
+    const formDataChanged = JSON.stringify(formData) !== JSON.stringify(initialFormDataRef.current);
+    const itemsChanged = JSON.stringify(items) !== JSON.stringify(initialItemsRef.current);
+    return formDataChanged || itemsChanged;
+  }, [formData, items]);
+
+  const {
+    showDialog, setShowDialog, handleConfirmNavigation,
+    handleCancelNavigation, handleSaveDraft, hasDraftSupport,
+  } = useUnsavedChangesWarning({ isDirty });
+
+  const [showPostConfirm, setShowPostConfirm] = useState(false);
+
+  const handleBack = useCallback(() => {
+    if (isDirty) {
+      setShowDialog(true);
+    } else {
+      navigate('/inventory/transfer-challan');
+    }
+  }, [isDirty, setShowDialog, navigate]);
+
+  const handleCreateNew = useCallback(() => {
+    clearSavedResult();
+    navigate('/inventory/transfer-challan/new');
+  }, [clearSavedResult, navigate]);
+
+  const handleBackToList = useCallback(() => {
+    clearSavedResult();
+    navigate('/inventory/transfer-challan');
+  }, [clearSavedResult, navigate]);
+
+  const canSave =
+    formData.fromStoreId > 0 &&
+    formData.toStoreId > 0 &&
+    formData.fromStoreId !== formData.toStoreId &&
+    !!formData.transferredBy &&
+    items.length > 0;
+
+  const hasInsufficientStock =
+    formData.fromStoreId > 0 &&
+    items.some(
+      (i) => i.itemId > 0 && i.quantity > getItemStock(i.itemId, null)
+    );
+
+  const fromStoreOptions = useMemo(() => {
+    if (!stores) return [];
+    return stores.map((s: any) => ({
+      id: s.id,
+      label: `${s.name} (${s.storeType.replace('_', ' ')})`,
+      type: s.storeType,
+      name: s.name,
+    }));
+  }, [stores]);
+
+  const toStoreOptions = useMemo(() => {
+    if (!stores) return [];
+    return stores
+      .filter((s: any) => s.id !== formData.fromStoreId)
+      .map((s: any) => ({
+        id: s.id,
+        label: `${s.name} (${s.storeType.replace('_', ' ')})`,
+        type: s.storeType,
+        name: s.name,
+      }));
+  }, [stores, formData.fromStoreId]);
+
+  const itemOptions = useMemo(() => {
+    const source = formData.fromStoreId && Object.keys(storeStockMap).length > 0
+      ? availableItems
+      : (itemsData || []);
+    return source.map((item: any) => ({
+      ...item,
+      label: `${item.itemCode} - ${item.itemName}`,
+    }));
+  }, [formData.fromStoreId, storeStockMap, availableItems, itemsData]);
 
   return (
     <Box>
-      <PageHeader
-        title={isEdit ? 'Edit Transfer Challan' : 'New Transfer Challan'}
-        subtitle="Store to Store transfer, or Department return to Store"
+      {savedResult ? (
+        <SuccessScreen
+          title={savedResult.status === 'Posted' ? 'Transfer Posted Successfully' : 'Draft Saved Successfully'}
+          subtitle={savedResult.status === 'Posted'
+            ? 'Stock balances have been updated. The transfer challan is now posted and cannot be edited.'
+            : 'Your transfer challan has been saved as a draft. You can edit and post it later.'}
+          entityCode="TC"
+          entityName={`Transfer Challan ${savedResult.id ? `#${savedResult.id}` : ''}`}
+          onViewDetails={() => navigate(`/inventory/transfer-challan/${savedResult.id}`)}
+          onCreateNew={handleCreateNew}
+          onBackToList={handleBackToList}
+        />
+      ) : (
+        <>
+          <PageHeader
+        title={isEdit ? 'Edit Store Transfer' : 'New Store Transfer'}
+        subtitle="Transfer stock between stores"
         breadcrumbs={[
           { label: 'Inventory', path: '/inventory/transfer-challan' },
-          { label: 'Transfer Challans', path: '/inventory/transfer-challan' },
-          { label: isEdit ? 'Edit' : 'New Challan' },
+          { label: 'Store Transfer', path: '/inventory/transfer-challan' },
+          { label: isEdit ? 'Edit' : 'New Transfer' },
         ]}
         actions={
-          <IconButton onClick={() => navigate('/inventory/transfer-challan')} sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1.5 }}>
-            <ArrowBack fontSize="small" />
-          </IconButton>
+          <Tooltip title="Back">
+            <IconButton
+              onClick={handleBack}
+              aria-label="Back"
+              sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1.5 }}
+            >
+              <ArrowBack fontSize="small" />
+            </IconButton>
+          </Tooltip>
         }
       />
 
-      <Card sx={{ mb: 2.5 }}>
-        <CardContent sx={{ p: 2.5, '&:last-child': { pb: 2.5 } }}>
-          <Stack direction="row" alignItems="center" spacing={1} mb={2}>
-            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 1, bgcolor: alpha(theme.palette.primary.main, 0.08) }}>
-              <Transform sx={{ fontSize: 16, color: 'primary.main' }} />
-            </Box>
-            <Typography variant="subtitle1" fontWeight={600}>Transfer Details</Typography>
-            {isFromDharamshala && (
-              <Chip label={`${selectedFromDept?.name} — ${fromRoomLocations.length} rooms`} size="small" color="warning" variant="outlined" />
-            )}
-            {isToDharamshala && (
-              <Chip label={`${selectedToDept?.name} — ${toRoomLocations.length} rooms`} size="small" color="info" variant="outlined" />
-            )}
-          </Stack>
-
-          <Grid container spacing={2}>
-            <Grid item xs={12} md={3}>
-              <DatePickerField
-                label="Transfer Date"
-                value={formData.date}
-                onChange={(val) => setFormData({ ...formData, date: val })}
-                fullWidth
-                size="small"
-              />
-            </Grid>
-            <Grid item xs={12} md={3}>
-              <FormControl size="small" fullWidth required>
-                <InputLabel>From Department</InputLabel>
-                <Select
-                  size="small"
-                  value={formData.fromDepartmentId || ''}
-                  label="From Department"
-                  onChange={(e) => {
-                    const newFromId = Number(e.target.value);
-                    setFormData({
-                      ...formData,
-                      fromDepartmentId: newFromId,
-                      toDepartmentId: 0,
-                      items: formData.items.map(i => ({ ...i, fromLocationId: null, toLocationId: null })),
-                    });
-                  }}
-                >
-                  <MenuItem value="">Select Source</MenuItem>
-                  {departments?.filter((d: any) => d.departmentType === 'Store').map((d: any) => (
-                    <MenuItem key={d.id} value={d.id}>
-                      {d.name} (Store)
-                    </MenuItem>
-                  ))}
-                  {departments?.filter((d: any) => d.departmentType === 'Dharamshala').map((d: any) => (
-                    <MenuItem key={d.id} value={d.id}>
-                      {d.name} (Dharamshala)
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-            </Grid>
-            <Grid item xs={12} md={3}>
-              <FormControl size="small" fullWidth required>
-                <InputLabel>To Department</InputLabel>
-                <Select
-                  size="small"
-                  value={formData.toDepartmentId || ''}
-                  label="To Department"
-                  onChange={(e) => {
-                    const newToId = Number(e.target.value);
-                    setFormData({
-                      ...formData,
-                      toDepartmentId: newToId,
-                      items: formData.items.map(i => ({ ...i, toLocationId: null })),
-                    });
-                  }}
-                >
-                  <MenuItem value="">Select Destination</MenuItem>
-                  {selectedFromDept?.departmentType === 'Store'
-                    ? departments?.filter((d: any) => d.departmentType === 'Store').map((d: any) => (
-                        <MenuItem key={d.id} value={d.id}>
-                          {d.name} (Store)
-                        </MenuItem>
-                      ))
-                    : departments?.filter((d: any) =>
-                        d.id === formData.fromDepartmentId || d.departmentType === 'Store'
-                      ).map((d: any) => (
-                        <MenuItem key={d.id} value={d.id}>
-                          {d.name} {d.departmentType === 'Dharamshala' ? '(Dharamshala)' : '(Store)'}
-                        </MenuItem>
-                      ))
-                  }
-                </Select>
-              </FormControl>
-            </Grid>
-            <Grid item xs={12} md={3}>
-              <TextField
-                label="Transferred By"
-                value={formData.transferredBy}
-                onChange={(e) => setFormData({ ...formData, transferredBy: e.target.value })}
-                fullWidth
-                required
-              />
-            </Grid>
-            <Grid item xs={12} md={6}>
-              <TextField
-                label="Approved By"
-                value={formData.approvedBy}
-                onChange={(e) => setFormData({ ...formData, approvedBy: e.target.value })}
-                fullWidth
-              />
-            </Grid>
-            <Grid item xs={12} md={6}>
-              <TextField
-                label="Remarks"
-                value={formData.remarks}
-                onChange={(e) => setFormData({ ...formData, remarks: e.target.value })}
-                fullWidth
-              />
-            </Grid>
+      <ChallanFormSection
+        icon={Transform}
+        title="Transfer Details"
+      >
+        <Grid container spacing={2}>
+          <Grid item xs={12} md={3}>
+            <DatePickerField
+              label="Transfer Date"
+              value={formData.date}
+              onChange={(val) => setFormData((p) => ({ ...p, date: val }))}
+              fullWidth
+              size="small"
+            />
           </Grid>
-        </CardContent>
-      </Card>
-
-      <Card sx={{ mb: 2.5 }}>
-        <CardContent sx={{ p: 2.5, '&:last-child': { pb: 2.5 } }}>
-          <Stack direction="row" justifyContent="space-between" alignItems="center" mb={2}>
-            <Stack direction="row" alignItems="center" spacing={1}>
-              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 1, bgcolor: alpha(theme.palette.primary.main, 0.08) }}>
-                <Inventory2 sx={{ fontSize: 16, color: 'primary.main' }} />
-              </Box>
-              <Typography variant="subtitle1" fontWeight={600}>Items</Typography>
-              {formData.items.length > 0 && (
-                <Chip label={`${formData.items.length} item${formData.items.length !== 1 ? 's' : ''}`} size="small" color="primary" variant="outlined" />
+          <Grid item xs={12} md={3}>
+            <Autocomplete
+              size="small"
+              options={fromStoreOptions}
+              getOptionLabel={(o) => o.label}
+              value={fromStoreOptions.find((o: { id: number }) => o.id === formData.fromStoreId) || null}
+              onChange={(_, v) => {
+                setFormData((p) => ({
+                  ...p,
+                  fromStoreId: v?.id || 0,
+                  toStoreId: p.toStoreId === v?.id ? 0 : p.toStoreId,
+                }));
+              }}
+              renderInput={(params) => (
+                <TextField {...params} label="From Store" required />
               )}
-            </Stack>
-            <Button startIcon={<Add />} onClick={addItem} variant="outlined" size="small">
-              Add Item
-            </Button>
-          </Stack>
+              sx={{ minWidth: 220 }}
+            />
+          </Grid>
+          <Grid item xs={12} md={3}>
+            <Autocomplete
+              size="small"
+              options={toStoreOptions}
+              getOptionLabel={(o) => o.label}
+              value={toStoreOptions.find((o: { id: number }) => o.id === formData.toStoreId) || null}
+              onChange={(_, v) => {
+                setFormData((p) => ({
+                  ...p,
+                  toStoreId: v?.id || 0,
+                }));
+              }}
+              renderInput={(params) => (
+                <TextField {...params} label="To Store" required />
+              )}
+              sx={{ minWidth: 220 }}
+            />
+          </Grid>
+          <Grid item xs={12} md={3}>
+            <TextField
+              label="Transferred By"
+              value={formData.transferredBy}
+              onChange={(e) => setFormData((p) => ({ ...p, transferredBy: e.target.value }))}
+              fullWidth
+              required
+            />
+          </Grid>
+          <Grid item xs={12} md={6}>
+            <TextField
+              label="Approved By"
+              value={formData.approvedBy}
+              onChange={(e) => setFormData((p) => ({ ...p, approvedBy: e.target.value }))}
+              fullWidth
+            />
+          </Grid>
+          <Grid item xs={12} md={6}>
+            <TextField
+              label="Remarks"
+              value={formData.remarks}
+              onChange={(e) => setFormData((p) => ({ ...p, remarks: e.target.value }))}
+              fullWidth
+            />
+          </Grid>
+        </Grid>
+      </ChallanFormSection>
 
-          <TableContainer>
-            <Table size="small">
-              <TableHead>
-                <TableRow>
-                  <TableCell sx={{ width: 40 }}>#</TableCell>
-                  <TableCell>Item</TableCell>
-                  <TableCell>From Room</TableCell>
-                  <TableCell sx={{ width: 110 }}>Quantity</TableCell>
-                  <TableCell>To Room</TableCell>
-                  <TableCell>Remarks</TableCell>
-                  <TableCell sx={{ width: 50 }}></TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {formData.items.map((item, idx) => (
-                  <TableRow key={idx} hover>
-                    <TableCell>
-                      <Typography variant="body2" fontWeight={600} color="text.secondary">{idx + 1}</Typography>
-                    </TableCell>
-                    <TableCell>
-                      <Autocomplete
-                        size="small"
-                        options={formData.fromDepartmentId && Object.keys(deptStockMap).length > 0 ? availableItems : (items || [])}
-                        getOptionLabel={(o: any) => `${o.itemCode} - ${o.itemName}`}
-                        value={items?.find((i: any) => i.id === item.itemId) || null}
-                        onChange={(_, v: any) => updateItem(idx, 'itemId', v?.id || 0)}
-                        renderOption={(props, option: any) => {
-                          const itemStock = getItemStock(option.id, item.fromLocationId);
-                          return (
-                            <li {...props} key={option.id}>
-                              <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
-                                <span>{option.itemCode} - {option.itemName}</span>
-                                <Chip
-                                  label={`${itemStock} ${option.unit?.name || ''}`}
-                                  size="small"
-                                  sx={{ height: 20, fontSize: '0.65rem', ml: 1, backgroundColor: itemStock > 0 ? alpha('#16A34A', 0.1) : alpha('#DC2626', 0.1), color: itemStock > 0 ? '#16A34A' : '#DC2626' }}
-                                />
-                              </Box>
-                            </li>
-                          );
-                        }}
-                        renderInput={(params) => <TextField {...params} placeholder={formData.fromDepartmentId ? "Search items in dept..." : "Search & select item..."} />}
-                        sx={{ minWidth: 260 }}
-                      />
-                    </TableCell>
-                    <TableCell>
-                      <FormControl size="small" fullWidth>
-                        <Select
-                          value={item.fromLocationId || ''}
-                          onChange={(e) => updateItem(idx, 'fromLocationId', e.target.value ? Number(e.target.value) : null)}
-                          displayEmpty
-                        >
-                          <MenuItem value=""><em>Dept Level</em></MenuItem>
-                          {fromRoomLocations.map((loc: any) => (
-                            <MenuItem key={loc.id} value={loc.id}>{loc.locationName}</MenuItem>
-                          ))}
-                        </Select>
-                      </FormControl>
-                    </TableCell>
-                    <TableCell>
-                      <Stack direction="row" alignItems="center" spacing={0.5}>
-                        {(() => {
-                          const itemStock = getItemStock(item.itemId, item.fromLocationId);
-                          return (
-                            <>
-                              <TextField
+      <ChallanFormSection icon={Inventory2} title="Items" count={items.length}>
+        <TableContainer
+          sx={{
+            borderRadius: '12px',
+            border: `1px solid ${alpha(theme.palette.divider, 0.5)}`,
+            '& .MuiTableCell-root': { fontSize: '0.8125rem' },
+            overflow: 'visible',
+          }}
+        >
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                <TableCell sx={{ width: 40, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', fontSize: '0.6875rem', color: 'text.secondary', bgcolor: alpha(theme.palette.primary.main, 0.03) }}>#</TableCell>
+                <TableCell sx={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', fontSize: '0.6875rem', color: 'text.secondary', bgcolor: alpha(theme.palette.primary.main, 0.03) }}>Item</TableCell>
+                <TableCell sx={{ width: 110, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', fontSize: '0.6875rem', color: 'text.secondary', bgcolor: alpha(theme.palette.primary.main, 0.03) }}>Quantity</TableCell>
+                <TableCell sx={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', fontSize: '0.6875rem', color: 'text.secondary', bgcolor: alpha(theme.palette.primary.main, 0.03) }}>Remarks</TableCell>
+                <TableCell sx={{ width: 50, bgcolor: alpha(theme.palette.primary.main, 0.03) }}></TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {items.map((item, idx) => (
+                <TableRow
+                  key={idx}
+                  hover
+                  sx={{
+                    '&:nth-of-type(odd)': { bgcolor: alpha(theme.palette.action.hover, 0.02) },
+                    '&:hover': { bgcolor: `${alpha(theme.palette.primary.main, 0.04)} !important` },
+                    transition: 'background-color 150ms ease-out',
+                  }}
+                >
+                  <TableCell>
+                    <Box
+                      sx={{
+                        width: 24,
+                        height: 24,
+                        borderRadius: '6px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        backgroundColor: alpha(theme.palette.primary.main, 0.08),
+                        fontSize: '0.6875rem',
+                        fontWeight: 700,
+                        color: 'primary.main',
+                      }}
+                    >
+                      {idx + 1}
+                    </Box>
+                  </TableCell>
+                  <TableCell>
+                    <Autocomplete
+                      size="small"
+                      options={itemOptions}
+                      getOptionLabel={(o: any) => o.label}
+                      value={itemOptions.find((o: any) => o.id === item.itemId) || null}
+                      onChange={(_, v: any) => updateItem(idx, 'itemId', v?.id || 0)}
+                      renderOption={(props, option: any) => {
+                        const itemStock = getItemStock(option.id, null);
+                        return (
+                          <li {...props} key={option.id}>
+                            <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
+                              <span>{option.itemCode} - {option.itemName}</span>
+                              <Chip
+                                label={`${itemStock} ${option.unit?.name || ''}`}
                                 size="small"
-                                type="number"
-                                value={item.quantity}
-                                onChange={(e) => {
-                                  const selectedItem = items?.find((i: any) => i.id === item.itemId);
-                                  const unitName = selectedItem?.unit?.name;
-                                  const val = Number(e.target.value);
-                                  const adjusted = isIntegerOnlyUnit(unitName) ? Math.round(val) : val;
-                                  updateItem(idx, 'quantity', adjusted);
+                                sx={{
+                                  height: 20,
+                                  fontSize: '0.65rem',
+                                  ml: 1,
+                                  backgroundColor: itemStock > 0
+                                    ? alpha('#16A34A', 0.1)
+                                    : alpha('#DC2626', 0.1),
+                                  color: itemStock > 0 ? '#16A34A' : '#DC2626',
                                 }}
-                                inputProps={{ min: 0.01, step: isIntegerOnlyUnit(items?.find((i: any) => i.id === item.itemId)?.unit?.name) ? 1 : 0.01 }}
-                                sx={{ width: 90 }}
-                                error={item.itemId > 0 && formData.fromDepartmentId > 0 && item.quantity > itemStock}
                               />
-                              {item.itemId > 0 && formData.fromDepartmentId > 0 && (
-                                <Chip
-                                  label={`${itemStock} avail`}
-                                  size="small"
-                                  sx={{
-                                    height: 20, fontSize: '0.6rem', fontWeight: 600,
-                                    backgroundColor: item.quantity > itemStock
-                                      ? alpha('#DC2626', 0.1) : alpha('#16A34A', 0.1),
-                                    color: item.quantity > itemStock
-                                      ? '#DC2626' : '#16A34A',
-                                  }}
-                                />
-                              )}
-                            </>
-                          );
-                        })()}
-                      </Stack>
-                    </TableCell>
-                    <TableCell>
-                      <FormControl size="small" fullWidth>
-                        <Select
-                          value={item.toLocationId || ''}
-                          onChange={(e) => updateItem(idx, 'toLocationId', e.target.value ? Number(e.target.value) : null)}
-                          displayEmpty
-                        >
-                          <MenuItem value=""><em>Select Room</em></MenuItem>
-                          {toRoomLocations.map((loc: any) => (
-                            <MenuItem key={loc.id} value={loc.id}>{loc.locationName}</MenuItem>
-                          ))}
-                        </Select>
-                      </FormControl>
-                    </TableCell>
-                    <TableCell>
-                      <TextField
+                            </Box>
+                          </li>
+                        );
+                      }}
+                      renderInput={(params) => (
+                        <TextField
+                          {...params}
+                          placeholder={
+                            formData.fromStoreId
+                              ? 'Search items in store...'
+                              : 'Search & select item...'
+                          }
+                        />
+                      )}
+                      sx={{ minWidth: 260 }}
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <Stack direction="row" alignItems="center" spacing={0.5}>
+                      {(() => {
+                        const itemStock = getItemStock(item.itemId, null);
+                        const selectedItem = itemsData?.find((i: any) => i.id === item.itemId);
+                        return (
+                          <>
+                            <TextField
+                              size="small"
+                              type="number"
+                              value={item.quantity}
+                              onChange={(e) => {
+                                const val = Number(e.target.value);
+                                const adjusted = isIntegerOnlyUnit(selectedItem?.unit?.name)
+                                  ? Math.round(val)
+                                  : val;
+                                updateItem(idx, 'quantity', adjusted);
+                              }}
+                              inputProps={{
+                                min: 0.01,
+                                step: isIntegerOnlyUnit(selectedItem?.unit?.name) ? 1 : 0.01,
+                              }}
+                              sx={{ width: 90 }}
+                              error={
+                                item.itemId > 0 &&
+                                formData.fromStoreId > 0 &&
+                                item.quantity > itemStock
+                              }
+                            />
+                            {item.itemId > 0 && formData.fromStoreId > 0 && (
+                              <Chip
+                                label={`${itemStock} avail`}
+                                size="small"
+                                sx={{
+                                  height: 20,
+                                  fontSize: '0.6rem',
+                                  fontWeight: 600,
+                                  backgroundColor:
+                                    item.quantity > itemStock
+                                      ? alpha('#DC2626', 0.1)
+                                      : alpha('#16A34A', 0.1),
+                                  color: item.quantity > itemStock ? '#DC2626' : '#16A34A',
+                                }}
+                              />
+                            )}
+                          </>
+                        );
+                      })()}
+                    </Stack>
+                  </TableCell>
+                  <TableCell>
+                    <TextField
+                      size="small"
+                      value={item.remarks}
+                      onChange={(e) => updateItem(idx, 'remarks', e.target.value)}
+                      placeholder="Note..."
+                      sx={{ width: 150 }}
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <Tooltip title="Remove item">
+                      <IconButton
                         size="small"
-                        value={item.remarks}
-                        onChange={(e) => updateItem(idx, 'remarks', e.target.value)}
-                        placeholder="Note..."
-                        sx={{ width: 150 }}
-                      />
-                    </TableCell>
-                    <TableCell>
-                      <IconButton size="small" color="error" onClick={() => removeItem(idx)} sx={{ '&:hover': { bgcolor: alpha(theme.palette.error.main, 0.08) } }}>
+                        color="error"
+                        onClick={() => removeItem(idx)}
+                        aria-label="Remove item"
+                        sx={{
+                          '&:hover': {
+                            bgcolor: alpha(theme.palette.error.main, 0.08),
+                          },
+                        }}
+                      >
                         <Delete fontSize="small" />
                       </IconButton>
-                    </TableCell>
-                  </TableRow>
-                ))}
-                {formData.items.length === 0 && (
-                  <TableRow>
-                    <TableCell colSpan={7}>
-                      <Box sx={{ py: 6, textAlign: 'center' }}>
-                        <Inventory2 sx={{ fontSize: 40, color: 'text.disabled', mb: 1 }} />
-                        <Typography variant="body2" color="text.secondary">No items added yet. Click "Add Item" to begin.</Typography>
-                      </Box>
-                    </TableCell>
-                  </TableRow>
-                )}
-              </TableBody>
-            </Table>
-          </TableContainer>
-        </CardContent>
-      </Card>
+                    </Tooltip>
+                  </TableCell>
+                </TableRow>
+              ))}
+              {items.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={5}>
+                    <EmptyItemsState actionLabel="Add first item" onAction={() => addItem()} />
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </TableContainer>
 
-      <Paper sx={{ p: 2, display: 'flex', justifyContent: 'flex-end', gap: 1.5, position: 'sticky', bottom: 16, border: '1px solid', borderColor: 'divider', boxShadow: 4 }}>
-        <Button variant="outlined" onClick={() => navigate('/inventory/transfer-challan')}>
-          Cancel
-        </Button>
-        <Button
-          variant="contained"
-          startIcon={<Save />}
-          onClick={() => saveMutation.mutate('Draft')}
-          disabled={!formData.fromDepartmentId || !formData.toDepartmentId || !formData.transferredBy || formData.items.length === 0}
-        >
-          Save Draft
-        </Button>
-        <Button
-          variant="contained"
-          color="success"
-          onClick={() => saveMutation.mutate('Posted')}
-          disabled={!formData.fromDepartmentId || !formData.toDepartmentId || !formData.transferredBy || formData.items.length === 0 || hasInsufficientStock}
-        >
-          Post Transfer
-        </Button>
-      </Paper>
+        <Box sx={{ mt: 1.5 }}>
+          <Button
+            size="small"
+            startIcon={<Add />}
+            onClick={() => addItem()}
+          >
+            Add Item
+          </Button>
+          <Button
+            size="small"
+            startIcon={<Add />}
+            onClick={() => setQuickAddOpen(true)}
+            sx={{ ml: 1 }}
+          >
+            Quick Add Item
+          </Button>
+        </Box>
+      </ChallanFormSection>
+
+      {/* Quick Add Item Dialog */}
+      <EnterpriseDialog
+        open={quickAddOpen}
+        onClose={() => {
+          setQuickAddOpen(false);
+          setQuickAddItemName('');
+          setQuickAddItemCode('');
+          setQuickAddUnit('');
+        }}
+        title="Quick Add Item"
+        subtitle="Add a new item and insert it into the form"
+        icon={<Inventory2 />}
+        maxWidth="xs"
+        actions={
+          <>
+            <Button
+              onClick={() => {
+                setQuickAddOpen(false);
+                setQuickAddItemName('');
+                setQuickAddItemCode('');
+                setQuickAddUnit('');
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="contained"
+              disabled={!quickAddItemName || !quickAddItemCode}
+              onClick={async () => {
+                try {
+                  const api = window.electronAPI;
+                  let unitId = 0;
+                  if (quickAddUnit.trim()) {
+                    const existingUnit = units?.find((u: any) => u.name.toLowerCase() === quickAddUnit.trim().toLowerCase());
+                    if (existingUnit) {
+                      unitId = existingUnit.id;
+                    } else {
+                      const created: any = await api.createUnit({ name: quickAddUnit.trim() });
+                      unitId = created.id;
+                    }
+                  }
+                  if (!unitId) throw new Error('Unit is required');
+
+                  const newItem = await api.createItemEnterprise({
+                    itemName: quickAddItemName,
+                    itemCode: quickAddItemCode,
+                    unitId,
+                    isActive: true,
+                  });
+                  if (newItem?.id) {
+                    addItem();
+                    const idx = items.length;
+                    setTimeout(() => {
+                      updateItem(idx, 'itemId', newItem.id);
+                    }, 0);
+                    toast.success(`Item "${quickAddItemName}" created`);
+                    setQuickAddOpen(false);
+                    setQuickAddItemName('');
+                    setQuickAddItemCode('');
+                    setQuickAddUnit('');
+                  }
+                } catch (err: any) {
+                  toast.error(getErrorMessage(err, 'Failed to create item'));
+                }
+              }}
+            >
+              Add & Insert
+            </Button>
+          </>
+        }
+      >
+        <Stack spacing={2}>
+          <TextField
+            label="Item Name"
+            value={quickAddItemName}
+            onChange={(e) => setQuickAddItemName(e.target.value)}
+            fullWidth
+            required
+            size="small"
+          />
+          <TextField
+            label="Item Code"
+            value={quickAddItemCode}
+            onChange={(e) => setQuickAddItemCode(e.target.value)}
+            fullWidth
+            required
+            size="small"
+          />
+          <TextField
+            label="Unit"
+            value={quickAddUnit}
+            onChange={(e) => setQuickAddUnit(e.target.value)}
+            fullWidth
+            size="small"
+            placeholder="e.g. Pcs, Kg, Box"
+          />
+        </Stack>
+      </EnterpriseDialog>
+
+      <ActionBar
+        onCancel={handleBack}
+        onSaveDraft={() => saveMutation.mutate('Draft')}
+        onPost={() => setShowPostConfirm(true)}
+        canSave={canSave}
+        saving={saveMutation.isPending}
+        postLabel="Post Transfer"
+      />
+
+      <PostConfirmationDialog
+        open={showPostConfirm}
+        title="Post Transfer Challan"
+        summary={[
+          { label: 'Challan Type', value: 'Store Transfer' },
+          { label: 'Date', value: formData.date },
+          { label: 'Items', value: `${items.length} item(s)` },
+          { label: 'Transferred By', value: formData.transferredBy || '—' },
+        ]}
+        onConfirm={() => {
+          setShowPostConfirm(false);
+          saveMutation.mutate('Posted');
+        }}
+        onCancel={() => setShowPostConfirm(false)}
+        loading={saveMutation.isPending}
+      />
+
+      <UnsavedChangesDialog
+        open={showDialog}
+        onConfirm={handleConfirmNavigation}
+        onCancel={handleCancelNavigation}
+        onSaveDraft={handleSaveDraft}
+        hasDraftSupport={hasDraftSupport}
+      />
+        </>
+      )}
     </Box>
   );
 }
