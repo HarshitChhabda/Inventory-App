@@ -17,6 +17,7 @@ Thumbs.db
 graphify-out/
 *.pyc
 __pycache__/
+venv/
 *.xlsx
 *.csv
 *.txt
@@ -27,6 +28,9 @@ tests/
 tsconfig.node.tsbuildinfo
 prisma/dev.db.*
 prisma/schema_temp.prisma
+
+# Data & import files
+data/
 
 # AI Agent directories
 .agent/
@@ -88,6 +92,7 @@ raw_stock.txt
 query.sql
 translate.py
 ledger-benchmark.js
+ledger-bench.db
 phase22-benchmark.js
 
 # Phase reports & test artifacts
@@ -95,4 +100,6 @@ PHASE_*.md
 TEST-REPORT.md
 test-*.js
 test-*.json
+test-*.txt
+test-*.db
 docs/
